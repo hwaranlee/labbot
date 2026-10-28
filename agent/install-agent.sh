@@ -27,7 +27,8 @@ EOF
 
 install -m 644 "$DIR/labbot-agent.service" /etc/systemd/system/labbot-agent.service
 systemctl daemon-reload
-systemctl enable --now labbot-agent
+systemctl enable labbot-agent
+systemctl restart labbot-agent  # 재설치할 때 새 설정으로 다시 시작
 
 echo "── 수집 테스트 ──"
 set -a; . /etc/labbot-agent.env; set +a
