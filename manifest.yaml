@@ -1,0 +1,80 @@
+display_information:
+  name: LabBot
+  description: 연구실 할 일 · 출퇴근/휴가 · GPU 서버 모니터링
+  background_color: "#1f3a5f"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: labbot
+    always_online: true
+  shortcuts:
+    - name: Todo로 만들기
+      type: message
+      callback_id: todo_from_message
+      description: 이 메시지를 할 일로 저장합니다
+    - name: 미팅 정리
+      type: message
+      callback_id: meeting_from_message
+      description: 이 메시지(스레드)를 회의록으로 action items를 정리합니다
+  slash_commands:
+    - command: /todo
+      description: 할 일 추가·목록 (예 /todo review paper @홍길동 by friday)
+      usage_hint: "[task] [@assignee] [tomorrow|fri|10/5] [14:00|3pm] · list · sent · channel · done 12 · delete 12"
+      should_escape: true
+    - command: /in
+      description: 출근 기록
+      usage_hint: "[remote|office] [09:10] [note]"
+      should_escape: false
+    - command: /out
+      description: 퇴근 기록
+      usage_hint: "[18:30]"
+      should_escape: false
+    - command: /leave
+      description: 휴가 신청 / 내역 / 팀 휴가
+      usage_hint: "[list|team]"
+      should_escape: false
+    - command: /attendance
+      description: 근태 현황·리포트
+      usage_hint: "[today|week|month @user|export 2026-09]"
+      should_escape: true
+    - command: /meeting
+      description: 회의록 → 요약·action items 정리 / 정기 미팅 / 주간 정리
+      usage_hint: "[recurring @user tue 14:00 60|list|view 12|weekly]"
+      should_escape: true
+    - command: /papers
+      description: 논문 구독 주제·검색·요약
+      usage_hint: "[add keywords cat:cs.CV|add-mine|list|delete 3|profile|search keywords|summary 2609.12345|now]"
+      should_escape: false
+    - command: /gpu
+      description: GPU 현황·예약
+      usage_hint: "[free|reserve gpu1 0,1 3h|release|mine|link linux-user|summary|today|week]"
+      should_escape: true
+    - command: /server
+      description: 서버 CPU·메모리·디스크 현황
+      usage_hint: "[help]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - chat:write.public
+      - im:write
+      - users:read
+      - channels:read
+      - groups:read
+      - channels:history
+      - groups:history
+      - files:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

@@ -1,0 +1,16 @@
+[Unit]
+Description=LabBot server agent (GPU/CPU/disk metrics)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/labbot-agent.env
+ExecStart=/usr/bin/env python3 /opt/labbot-agent/labbot_agent.py
+Restart=always
+RestartSec=10
+# 다른 사용자의 GPU 프로세스가 보이지 않으면 아래 줄을 지우고 root로 실행하세요.
+User=nobody
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

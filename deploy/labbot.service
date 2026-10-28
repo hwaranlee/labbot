@@ -1,0 +1,14 @@
+[Unit]
+Description=LabBot (Slack app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/labbot
+ExecStart=/opt/labbot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=10
+User=labbot
+
+[Install]
+WantedBy=multi-user.target
