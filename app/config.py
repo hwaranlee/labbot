@@ -47,6 +47,8 @@ class Config:
     checkin_reminder: time = time(10, 30)
     checkout_reminder: time = time(21, 0)
     extra_holidays: list[str] = field(default_factory=list)  # YYYY-MM-DD, 연구실 자체 휴무일
+    attendance_gsheet_id: str = ""       # 출퇴근·휴가 기록 시트 (GPU 시트와 별도)
+    attendance_sheet_sync: time = time(4, 30)
 
     # Todo
     todo_digest: time = time(9, 0)
@@ -118,6 +120,8 @@ def load_config() -> Config:
         checkin_reminder=_time("CHECKIN_REMINDER", "10:30"),
         checkout_reminder=_time("CHECKOUT_REMINDER", "21:00"),
         extra_holidays=_list("EXTRA_HOLIDAYS"),
+        attendance_gsheet_id=os.environ.get("ATTENDANCE_GSHEET_ID", ""),
+        attendance_sheet_sync=_time("ATTENDANCE_SHEET_SYNC", "04:30"),
         todo_digest=_time("TODO_DIGEST", "09:00"),
         metrics_host=os.environ.get("METRICS_HOST", "0.0.0.0"),
         metrics_port=_int("METRICS_PORT", 8787),

@@ -1,0 +1,10 @@
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+*sa*.json
+*service-account*.json
+.venv/
+__pycache__/
+.pytest_cache/

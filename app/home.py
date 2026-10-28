@@ -16,7 +16,7 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     b: list = [header("🧪 LabBot")]
     hol = ctx.holiday_name(today)
     b.append(context(f"{att.fmt_day(today)}" + (f" · {hol}" if hol else "")
-                     + " · 명령어: `/todo` `/in` `/out` `/leave` `/attendance` `/meeting` `/papers` `/gpu` `/server`"))
+                     + " · 명령어: `/todo` `/in` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/gpu` `/server`"))
 
     # 근태
     st = att.status_of(ctx, uid)

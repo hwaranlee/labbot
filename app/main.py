@@ -61,6 +61,8 @@ def start_scheduler(ctx: Ctx, mon: servers.Monitor) -> BackgroundScheduler:
     sched.add_job(safe(lambda: attendance.checkout_reminder_job(ctx)), at(c.checkout_reminder), id="checkout_reminder")
     sched.add_job(safe(mon.watch), "interval", minutes=1, id="server_watch")
     sched.add_job(safe(mon.daily_summary_job), at(c.server_summary), id="server_summary")
+    sched.add_job(safe(lambda: attendance.sheet_job(ctx)), at(c.attendance_sheet_sync), id="attendance_sheet",
+                  misfire_grace_time=3600)
     sched.add_job(safe(lambda: gpureport.weekly_job(ctx, mon)), at(c.gpu_weekly, c.gpu_weekly_day),
                   id="gpu_weekly", misfire_grace_time=3600)
     sched.add_job(safe(lambda: meetings.recurring_prompt_job(ctx)), "interval", minutes=5, id="meeting_prompt")

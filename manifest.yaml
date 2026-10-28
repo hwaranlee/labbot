@@ -32,7 +32,7 @@ features:
       description: 퇴근 기록
       usage_hint: "[18:30]"
       should_escape: false
-    - command: /leave
+    - command: /vacation
       description: 휴가 신청 / 내역 / 팀 휴가
       usage_hint: "[list|team]"
       should_escape: false

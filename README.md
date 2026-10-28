@@ -108,6 +108,19 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 
 탭은 자동으로 만들어집니다: `GPU 주간`(서버·GPU별), `사용자 주간`(리눅스 계정별), `예약 내역`(예약 1건당 1행, 예약 시간 동안의 사용률·메모리·사용 비율).
 
+#### 출퇴근·휴가 시트 (별도 시트)
+
+개인 정보라서 GPU 시트와 **다른 스프레드시트**를 씁니다. 공유 범위도 따로 관리하세요(예: 교수님·행정 담당만).
+
+1. 빈 스프레드시트를 하나 더 만들고, 같은 서비스 계정 이메일을 **편집자**로 공유합니다.
+2. `.env`에 `ATTENDANCE_GSHEET_ID=<시트 ID>`를 넣습니다. 서비스 계정 키(`GOOGLE_SERVICE_ACCOUNT_FILE`)는 같은 것을 씁니다.
+3. 관리자가 `/attendance sheet`를 입력해 바로 확인합니다.
+
+* 매일 04:30(`ATTENDANCE_SHEET_SYNC`)에 **이번 달·지난달 `출퇴근 YYYY-MM` 탭**과 **올해 `휴가 YYYY` 탭**(1월에는 작년 탭도)을 **통째로 다시 씁니다.**
+* 나중에 고친 출퇴근 시각, 휴가 취소·반려도 다음 날 그대로 반영되고, 행이 중복되지 않습니다.
+* 그래서 시트에서 직접 고친 내용은 다음 동기화 때 덮어써집니다. 메모가 필요하면 별도 탭이나 오른쪽 빈 열이 아닌 **다른 탭**에 적어 두세요.
+* 원본은 계속 봇의 `labbot.db`에 있고, 시트는 보기용 사본입니다.
+
 ## 4. 처음 쓸 때 할 일
 
 * 논문 주제를 등록하세요. 예: `/papers add video diffusion, video generation cat:cs.CV` 다음 `/papers profile 우리 연구실은 ...` (연구실 소개 2~3문장, 관련도 판단에 사용)
@@ -141,11 +154,12 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 | `/in` · `/in remote` · `/in office conference` | 출근 기록 (`office` 출근 · `remote` 재택, 뒤의 글은 메모 / `#출퇴근` 채널에 공유) |
 | `/in 09:10` · `/out 18:30` | 깜빡했을 때 실제 시각으로 기록하거나 정정 |
 | `/out` | 퇴근 기록과 오늘 근무 시간 표시 |
-| `/leave` | 휴가 신청 창 (연차, 오전·오후 반차, 병가, 공가, 기타) |
-| `/leave list` · `/leave team` | 내 휴가와 올해 연차 사용 일수 · 앞으로 2주간 팀 휴가 |
+| `/vacation` | 휴가 신청 창 (연차, 오전·오후 반차, 병가, 공가, 기타) |
+| `/vacation list` · `/vacation team` | 내 휴가와 올해 연차 사용 일수 · 앞으로 2주간 팀 휴가 |
 | `/attendance` | 오늘 누가 출근·재택·휴가·미출근인지 |
 | `/attendance week` · `/attendance month @홍길동` | 근무일, 총 근무시간, 평균 출근 시각, 퇴근 기록 누락 |
 | `/attendance export 2026-09` | 월별 출퇴근과 휴가 기록 CSV를 DM으로 받기 (관리자만, 엑셀에서 한글이 깨지지 않습니다) |
+| `/attendance sheet` | 출퇴근·휴가 Google Sheet 바로 동기화 (관리자만) |
 
 * **휴가 승인 절차:** 신청하면 `LEAVE_APPROVER_IDS`에게 승인·반려 버튼이 담긴 DM이 갑니다. 처리 결과는 신청자에게 DM으로, 승인된 휴가는 `#출퇴근` 채널에 공유됩니다. 반려할 때는 사유를 적을 수 있습니다. 승인자 본인이 신청하면 자동으로 승인됩니다.
 * 휴가 일수는 주말과 **공휴일(대체공휴일 포함)을 빼고** 계산합니다. 연구실 자체 휴무일은 `EXTRA_HOLIDAYS`에 추가하세요.
@@ -235,7 +249,7 @@ python -m app.main            # .env 필요
 app/
   main.py        진입점 (Socket Mode, 스케줄러, 지표 수신 서버)
   todo.py        /todo, 메시지 단축키, 리마인더
-  attendance.py  /in /out /leave /attendance, 승인 절차, 리마인더, CSV
+  attendance.py  /in /out /vacation /attendance, 승인 절차, 리마인더, CSV
   servers.py     지표 수신(HTTP), /gpu /server, 예약, 알림, 일일 요약
   gpureport.py   주간 GPU 리포트 (예약 vs 실제 사용), Google Sheet 기록
   meetings.py    /meeting, 회의록 → action items, 정기 미팅 알림, 금요일 주간 정리

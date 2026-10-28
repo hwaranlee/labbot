@@ -374,6 +374,59 @@ def test_board_and_export(env):
     assert a.startswith("﻿날짜") and "나" in a
 
 
+class FakeWS:
+    def __init__(self, title):
+        self.title, self.values, self.cleared = title, [], 0
+
+    def freeze(self, rows=None):
+        pass
+
+    def clear(self):
+        self.values, self.cleared = [], self.cleared + 1
+
+    def resize(self, rows=None, cols=None):
+        pass
+
+    def update(self, values=None, range_name=None, value_input_option=None):
+        self.values = values
+
+
+class FakeSheet:
+    def __init__(self):
+        self.tabs = {}
+
+    def worksheets(self):
+        return list(self.tabs.values())
+
+    def add_worksheet(self, title, rows, cols):
+        self.tabs[title] = FakeWS(title)
+        return self.tabs[title]
+
+
+def test_attendance_sheet_sync(env, monkeypatch):
+    from app import gsheet
+    sheet = FakeSheet()
+    monkeypatch.setattr(gsheet, "open_sheet", lambda ctx, sid: sheet)
+    env.command("/attendance", "sheet", user=BOSS)
+    assert "설정되지 않았어요" in env.responded[-1]["text"]
+    env.ctx.cfg.attendance_gsheet_id, env.ctx.cfg.google_sa_file = "ATT", "/tmp/sa.json"
+
+    env.command("/in", "remote")
+    env.command("/attendance", "sheet")
+    assert "관리자" in env.responded[-1]["text"]
+    env.command("/attendance", "sheet", user=BOSS)
+    assert "동기화했어요" in env.responded[-1]["text"] and "시트 열기" in env.responded[-1]["text"]
+    t = env.ctx.today()
+    tab = sheet.tabs[f"출퇴근 {t.year}-{t.month:02d}"]
+    assert tab.values[0] == att.ATT_HEADER and tab.values[1][1] == "나" and tab.values[1][3] == "재택"
+    assert f"휴가 {t.year}" in sheet.tabs
+
+    # 나중에 고친 기록도 다시 쓰면서 반영되고 중복되지 않음
+    env.ctx.db.run("UPDATE attendance SET note='고침'")
+    att.sheet_job(env.ctx)
+    assert len(tab.values) == 2 and tab.values[1][7] == "고침" and tab.cleared == 1
+
+
 def test_home_publish(env):
     env.command("/todo", "home test")
     env.ctx.refresh_home(ME)
@@ -573,12 +626,12 @@ def test_english_commands_everywhere(env):
     assert "내가 맡긴" in env.responded[-1]["text"]
     env.command("/todo", "channel")
     assert "채널의 할 일" in env.responded[-1]["text"]
-    env.command("/leave", "list")
+    env.command("/vacation", "list")
     assert env.responded[-1]["text"] == "내 휴가"
-    env.command("/leave", "team")
+    env.command("/vacation", "team")
     assert env.responded[-1]["text"] == "팀 휴가"
-    env.command("/leave", "nonsense")
-    assert "/leave list" in env.responded[-1]["text"]
+    env.command("/vacation", "nonsense")
+    assert "/vacation list" in env.responded[-1]["text"]
     env.command("/attendance", "today")
     assert env.responded[-1]["text"] == "오늘 근태"
     env.command("/attendance", "month")
@@ -612,5 +665,5 @@ def test_korean_aliases_still_work(env):
     assert env.ctx.db.one("SELECT mode FROM attendance")["mode"] == "remote"
     env.command("/attendance", "주간")
     assert env.responded[-1]["text"] == "근무 요약"
-    env.command("/leave", "내역")
+    env.command("/vacation", "내역")
     assert env.responded[-1]["text"] == "내 휴가"

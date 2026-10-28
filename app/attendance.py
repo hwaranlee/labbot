@@ -8,6 +8,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta
 
+from . import gsheet
 from .ctx import (Ctx, actions, button, confirm_dialog, context, divider, header,
                   modal_value, section)
 from .timeparse import WEEKDAY_NAMES, fmt_duration, parse_hhmm
@@ -20,14 +21,15 @@ MODE_WORDS = {"remote": "remote", "wfh": "remote", "home": "remote", "office": "
               "재택": "remote", "집": "remote", "사무실": "office"}
 LEAVE_KINDS = {"annual": "연차", "am": "오전 반차", "pm": "오후 반차",
                "sick": "병가", "official": "공가", "other": "기타"}
+LEAVE_STATUS = {"pending": "대기", "approved": "승인", "rejected": "반려", "cancelled": "취소"}
 OPEN_WINDOW = 20 * 3600  # 출근 후 20시간이 지나면 열린 기록으로 보지 않음
 
 HELP = """*🕘 근태 명령어*
 • `/in` 출근 · `/in remote` 재택 · `/in office 학회 발표` 출근(메모) · `/in 09:10` (오늘 출근 시각 정정)
 • `/out` 퇴근 · `/out 18:30` (오늘 퇴근 시각 정정)
-• `/leave` 휴가 신청 · `/leave list` 내 휴가 · `/leave team` 앞으로 2주 팀 휴가
+• `/vacation` 휴가 신청 · `/vacation list` 내 휴가 · `/vacation team` 앞으로 2주 팀 휴가
 • `/attendance` 오늘 현황 · `/attendance week` · `/attendance month @홍길동`
-• `/attendance export 2026-09` 월별 CSV (관리자)"""
+• `/attendance export 2026-09` 월별 CSV · `/attendance sheet` Google Sheet 바로 동기화 (관리자)"""
 
 
 def fmt_day(d: date) -> str:
@@ -381,29 +383,72 @@ def report_blocks(ctx: Ctx, kind: str, target: str | None) -> list:
     return blocks
 
 
-def export_csv(ctx: Ctx, year: int, month: int) -> tuple[str, str]:
-    start = date(year, month, 1)
-    end = (date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1))
+ATT_HEADER = ["날짜", "이름", "Slack ID", "형태", "출근", "퇴근", "근무(시간)", "메모"]
+LEAVE_HEADER = ["이름", "Slack ID", "종류", "시작", "종료", "일수", "상태", "승인자", "사유"]
+
+
+def month_range(year: int, month: int) -> tuple[date, date]:
+    return date(year, month, 1), date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+
+
+def attendance_rows(ctx: Ctx, start: date, end: date) -> list[list]:
     rows = ctx.db.all("SELECT * FROM attendance WHERE date>=? AND date<=? ORDER BY date, user_id, in_at",
                       (start.isoformat(), end.isoformat()))
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["날짜", "이름", "Slack ID", "형태", "출근", "퇴근", "근무(시간)", "메모"])
+    out = []
     for r in rows:
         hours = round((r["out_at"] - r["in_at"]) / 3600, 2) if r["out_at"] else ""
-        w.writerow([r["date"], ctx.name(r["user_id"]), r["user_id"], MODES[r["mode"]][1],
+        out.append([r["date"], ctx.name(r["user_id"]), r["user_id"], MODES[r["mode"]][1],
                     hm(ctx, r["in_at"]), hm(ctx, r["out_at"]) if r["out_at"] else "", hours, r["note"] or ""])
-    att = "﻿" + buf.getvalue()  # 엑셀 한글 깨짐 방지 BOM
+    return out
 
+
+def leave_rows(ctx: Ctx, start: date, end: date) -> list[list]:
+    """기간에 걸치는 휴가 (취소·반려 포함, 상태 칸으로 구분)"""
+    return [[ctx.name(l["user_id"]), l["user_id"], LEAVE_KINDS.get(l["kind"], l["kind"]),
+             l["start_date"], l["end_date"], l["days"], LEAVE_STATUS.get(l["status"], l["status"]),
+             ctx.name(l["approver_id"]) if l["approver_id"] else "", l["reason"] or ""]
+            for l in ctx.db.all("SELECT * FROM leaves WHERE start_date<=? AND end_date>=? ORDER BY start_date",
+                                (end.isoformat(), start.isoformat()))]
+
+
+def _csv(header: list, rows: list[list]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["이름", "Slack ID", "종류", "시작", "종료", "일수", "상태", "승인자", "사유"])
-    for l in ctx.db.all("SELECT * FROM leaves WHERE start_date<=? AND end_date>=? ORDER BY start_date",
-                        (end.isoformat(), start.isoformat())):
-        w.writerow([ctx.name(l["user_id"]), l["user_id"], LEAVE_KINDS.get(l["kind"], l["kind"]),
-                    l["start_date"], l["end_date"], l["days"], l["status"],
-                    ctx.name(l["approver_id"]) if l["approver_id"] else "", l["reason"] or ""])
-    return att, "﻿" + buf.getvalue()
+    w.writerow(header)
+    w.writerows(rows)
+    return "\ufeff" + buf.getvalue()  # 엑셀 한글 깨짐 방지 BOM
+
+
+def export_csv(ctx: Ctx, year: int, month: int) -> tuple[str, str]:
+    start, end = month_range(year, month)
+    return _csv(ATT_HEADER, attendance_rows(ctx, start, end)), _csv(LEAVE_HEADER, leave_rows(ctx, start, end))
+
+
+# ── Google Sheet ────────────────────────────────────────────
+def sync_sheet(ctx: Ctx) -> str:
+    """이번 달·지난달 출퇴근 탭과 올해(1월이면 작년도) 휴가 탭을 통째로 다시 씁니다.
+    나중에 고친 시각이나 취소·반려도 그대로 반영되고, 행이 중복되지 않습니다."""
+    sid = ctx.cfg.attendance_gsheet_id
+    if not (sid and ctx.cfg.google_sa_file):
+        return "Google Sheet가 설정되지 않았어요 (`ATTENDANCE_GSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_FILE`)."
+    t = ctx.today()
+    prev = t.replace(day=1) - timedelta(days=1)
+    sh = gsheet.open_sheet(ctx, sid)
+    n = 0
+    for y, m in sorted({(prev.year, prev.month), (t.year, t.month)}):
+        rows = attendance_rows(ctx, *month_range(y, m))
+        gsheet.replace_tab(sh, f"출퇴근 {y}-{m:02d}", ATT_HEADER, rows)
+        n += len(rows)
+    for y in sorted({prev.year, t.year}):
+        rows = leave_rows(ctx, date(y, 1, 1), date(y, 12, 31))
+        gsheet.replace_tab(sh, f"휴가 {y}", LEAVE_HEADER, rows)
+        n += len(rows)
+    return f"📄 Google Sheet를 동기화했어요 ({n}행)."
+
+
+def sheet_job(ctx: Ctx) -> None:
+    if ctx.cfg.attendance_gsheet_id:
+        log.info(sync_sheet(ctx))
 
 
 # ── 리마인더 ────────────────────────────────────────────────
@@ -470,7 +515,7 @@ def register(app, ctx: Ctx) -> None:
                 rest.append(tok)
         respond(clock_out(ctx, command["user_id"], " ".join(rest), at)[1])
 
-    @app.command("/leave")
+    @app.command("/vacation")
     def cmd_leave(ack, command, respond, client):
         ack()
         uid, sub = command["user_id"], (command.get("text") or "").strip().lower()
@@ -513,6 +558,16 @@ def register(app, ctx: Ctx) -> None:
             except Exception as e:  # noqa: BLE001
                 log.exception("CSV 업로드 실패")
                 return respond(f"CSV 업로드에 실패했어요: {e}")
+        if sub in ("sheet", "시트"):
+            if not ctx.is_admin(uid):
+                return respond("시트 동기화는 관리자(ADMIN_IDS)만 할 수 있어요.")
+            try:
+                msg = sync_sheet(ctx)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Google Sheet 동기화 실패")
+                return respond(f"Google Sheet 동기화에 실패했어요: {e}")
+            url = gsheet.url(ctx.cfg.attendance_gsheet_id)
+            return respond(msg + (f" <{url}|시트 열기>" if url and msg.startswith("📄") else ""))
         return respond(HELP)
 
     @app.action(re.compile(r"^att_in_"))

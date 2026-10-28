@@ -5,6 +5,7 @@ import logging
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
+from . import gsheet
 from .ctx import Ctx, context, section
 from .timeparse import WEEKDAY_NAMES
 
@@ -209,13 +210,12 @@ class Report:
 
 
 def sheet_url(ctx: Ctx) -> str:
-    return f"https://docs.google.com/spreadsheets/d/{ctx.cfg.gsheet_id}" if ctx.cfg.gsheet_id else ""
+    return gsheet.url(ctx.cfg.gsheet_id)
 
 
 def _open_sheet(ctx: Ctx):
     """서비스 계정으로 스프레드시트를 엽니다. 테스트에서 가짜로 바꿔 끼웁니다."""
-    import gspread  # 선택 의존성: Google Sheet를 쓸 때만 필요
-    return gspread.service_account(filename=ctx.cfg.google_sa_file).open_by_key(ctx.cfg.gsheet_id)
+    return gsheet.open_sheet(ctx, ctx.cfg.gsheet_id)
 
 
 def write_sheet(ctx: Ctx, rep: Report, force: bool = False) -> str:
