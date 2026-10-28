@@ -28,6 +28,10 @@ features:
       description: 출근 기록
       usage_hint: "[remote|office] [09:10] [note]"
       should_escape: false
+    - command: /pause
+      description: 휴식 시작·복귀 (근무 시간에서 빠짐)
+      usage_hint: "[memo] · 12:00-13:00 [memo]"
+      should_escape: false
     - command: /out
       description: 퇴근 기록
       usage_hint: "[18:30]"

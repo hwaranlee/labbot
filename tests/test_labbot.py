@@ -276,6 +276,56 @@ def test_clock_in_out(env):
     assert "근무 요약" in env.responded[-1]["text"]
 
 
+def test_pause_breaks_reduce_work_time(env):
+    env.command("/pause")
+    assert "출근 기록이 없어요" in env.responded[-1]["text"]
+    env.command("/in")
+    rec = env.ctx.db.one("SELECT * FROM attendance")
+    env.ctx.db.run("UPDATE attendance SET in_at=in_at-3600*9")
+    env.command("/pause", "점심")
+    assert "휴식 시작" in env.responded[-1]["text"]
+    b = env.ctx.db.one("SELECT * FROM attendance_breaks")
+    assert b["end_at"] is None and b["note"] == "점심"
+    assert att.status_of(env.ctx, ME)["break"] is not None
+    env.command("/attendance")
+    assert "⏸ 휴식" in env.responded[-1]["blocks"][0]["text"]["text"]
+    env.ctx.refresh_home(ME)
+    assert "att_pause" in json.dumps(_load(env.client.of("views.publish")[-1]["view"]))
+
+    # 1시간 휴식 후 /in 으로 복귀
+    env.ctx.db.run("UPDATE attendance_breaks SET start_at=start_at-3600")
+    env.command("/in")
+    assert "복귀" in env.responded[-1]["text"] and "1시간" in env.responded[-1]["text"]
+    env.command("/pause", "end")
+    assert "진행 중인 휴식이 없어요" in env.responded[-1]["text"]
+
+    env.command("/out")
+    assert "근무 8시간" in env.responded[-1]["text"], env.responded[-1]["text"]  # 9시간 - 휴식 1시간
+    s = att.summarize(env.ctx, ME, env.ctx.today(), env.ctx.today())
+    assert 8 * 3600 - 120 <= s["secs"] <= 8 * 3600 + 120
+    row = att.attendance_rows(env.ctx, env.ctx.today(), env.ctx.today())[0]
+    assert row[6] == 1.0 and 7.9 <= row[7] <= 8.1
+    posts = [a["text"] for a in env.client.of("chat.postMessage") if a["channel"] == "CATT"]
+    assert any(t.startswith("⏸") for t in posts) and any(t.startswith("▶️") for t in posts)
+
+
+def test_pause_retro_span(env):
+    env.command("/in", "08:00")
+    if "미래" in env.responded[-1]["text"]:
+        pytest.skip("자정~08시 사이에는 과거 출근 시각을 만들 수 없음")
+    rec = env.ctx.db.one("SELECT * FROM attendance")
+    env.ctx.db.run("UPDATE attendance SET in_at=?", (rec["in_at"] - 1,))
+    now = env.ctx.now()
+    if now.hour < 9:
+        pytest.skip("휴식 범위를 만들 시간이 부족함")
+    env.command("/pause", "08:00-08:30 산책")
+    assert "기록했어요" in env.responded[-1]["text"] and "30분" in env.responded[-1]["text"]
+    env.command("/pause", "08:10-08:20")
+    assert "겹쳐요" in env.responded[-1]["text"]
+    env.command("/pause", "08:30-08:10")
+    assert "시작이 끝보다" in env.responded[-1]["text"]
+
+
 def test_parse_in_args():
     m, note, at = att.parse_in_args("office 09:10 conference talk")
     assert m == "office" and note == "conference talk" and f"{at:%H:%M}" == "09:10"
@@ -424,7 +474,7 @@ def test_attendance_sheet_sync(env, monkeypatch):
     # 나중에 고친 기록도 다시 쓰면서 반영되고 중복되지 않음
     env.ctx.db.run("UPDATE attendance SET note='고침'")
     att.sheet_job(env.ctx)
-    assert len(tab.values) == 2 and tab.values[1][7] == "고침" and tab.cleared == 1
+    assert len(tab.values) == 2 and tab.values[1][8] == "고침" and tab.cleared == 1
 
 
 def test_home_publish(env):

@@ -153,6 +153,8 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 |---|---|
 | `/in` · `/in remote` · `/in office conference` | 출근 기록 (`office` 출근 · `remote` 재택, 뒤의 글은 메모 / `#출퇴근` 채널에 공유) |
 | `/in 09:10` · `/out 18:30` | 깜빡했을 때 실제 시각으로 기록하거나 정정 |
+| `/pause` · `/pause 점심` | 휴식 시작. 다시 `/pause`(또는 `/in`, 홈 탭 ▶️ 복귀)로 복귀. **휴식 시간은 근무 시간에서 빠집니다** |
+| `/pause 12:00-13:00 점심` | 지난 휴식을 나중에 기록 (퇴근 후에도 가능) |
 | `/out` | 퇴근 기록과 오늘 근무 시간 표시 |
 | `/vacation` | 휴가 신청 창 (연차, 오전·오후 반차, 병가, 공가, 기타) |
 | `/vacation list` · `/vacation team` | 내 휴가와 올해 연차 사용 일수 · 앞으로 2주간 팀 휴가 |
@@ -250,7 +252,7 @@ python -m app.main            # .env 필요
 app/
   main.py        진입점 (Socket Mode, 스케줄러, 지표 수신 서버)
   todo.py        /todo, 메시지 단축키, 리마인더
-  attendance.py  /in /out /vacation /attendance, 승인 절차, 리마인더, CSV
+  attendance.py  /in /pause /out /vacation /attendance, 승인 절차, 리마인더, CSV
   servers.py     지표 수신(HTTP), /gpu /server, 예약, 알림, 일일 요약
   gpureport.py   주간 GPU 리포트 (예약 vs 실제 사용), Google Sheet 기록
   meetings.py    /meeting, 회의록 → action items, 정기 미팅 알림, 금요일 주간 정리

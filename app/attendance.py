@@ -26,6 +26,7 @@ OPEN_WINDOW = 20 * 3600  # 출근 후 20시간이 지나면 열린 기록으로 
 
 HELP = """*🕘 근태 명령어*
 • `/in` 출근 · `/in remote` 재택 · `/in office 학회 발표` 출근(메모) · `/in 09:10` (오늘 출근 시각 정정)
+• `/pause` 휴식 시작 · 다시 `/pause` 하면 복귀 · `/pause 12:00-13:00 점심` 지난 휴식 기록 (근무 시간에서 빠짐)
 • `/out` 퇴근 · `/out 18:30` (오늘 퇴근 시각 정정)
 • `/vacation` 휴가 신청 · `/vacation list` 내 휴가 · `/vacation team` 앞으로 2주 팀 휴가
 • `/attendance` 오늘 현황 · `/attendance week` · `/attendance month @홍길동`
@@ -66,6 +67,8 @@ def clock_in(ctx: Ctx, uid: str, mode: str = "office", note: str = "", at=None) 
             ctx.db.run("UPDATE attendance SET in_at=? WHERE id=?", (ts, cur["id"]))
             ctx.refresh_home(uid)
             return True, f"✏️ 오늘 출근 시각을 {hm(ctx, ts)}로 고쳤어요."
+        if open_break(ctx, cur["id"]):
+            return end_break(ctx, uid, cur)
         return False, f"이미 {hm(ctx, cur['in_at'])}에 출근했어요. 퇴근은 `/out`"
     ctx.db.run("INSERT INTO attendance(user_id, date, in_at, mode, note) VALUES (?,?,?,?,?)",
                (uid, ctx.today().isoformat(), ts, mode, note or None))
@@ -97,12 +100,95 @@ def clock_out(ctx: Ctx, uid: str, note: str = "", at=None) -> tuple[bool, str]:
         ts = int(datetime.combine(d, at, ctx.tz).timestamp())
     if ts <= cur["in_at"] or ts > now:
         return False, "퇴근 시각은 출근 시각 이후, 현재 이전이어야 해요."
+    ob = open_break(ctx, cur["id"])
+    if ob and ts <= ob["start_at"]:
+        return False, f"{hm(ctx, ob['start_at'])}부터 휴식 중이에요. 퇴근 시각은 휴식 시작 이후여야 해요."
+    if ob:
+        ctx.db.run("UPDATE attendance_breaks SET end_at=? WHERE id=?", (ts, ob["id"]))
     ctx.db.run("UPDATE attendance SET out_at=?, note=COALESCE(?, note) WHERE id=?",
                (ts, note or None, cur["id"]))
-    worked = fmt_duration(ts - cur["in_at"])
+    worked = fmt_duration(ts - cur["in_at"] - break_secs(ctx, cur["id"], ts))
     ctx.post(ctx.cfg.attendance_channel, f"🏁 <@{uid}> 퇴근 {hm(ctx, ts)} · 근무 {worked}")
     ctx.refresh_home(uid)
     return True, f"🏁 퇴근 기록했어요 ({hm(ctx, ts)}) · 오늘 근무 {worked}"
+
+
+# ── 휴식 ────────────────────────────────────────────────────
+PAUSE_END_WORDS = {"end", "resume", "back", "복귀", "끝"}
+
+
+def open_break(ctx: Ctx, att_id: int):
+    return ctx.db.one("SELECT * FROM attendance_breaks WHERE att_id=? AND end_at IS NULL", (att_id,))
+
+
+def break_secs(ctx: Ctx, att_id: int, until: int) -> int:
+    """until 시각까지의 휴식 시간 합 (진행 중인 휴식은 until까지)"""
+    total = 0
+    for b in ctx.db.all("SELECT * FROM attendance_breaks WHERE att_id=?", (att_id,)):
+        total += max(0, min(b["end_at"] or until, until) - b["start_at"])
+    return total
+
+
+def end_break(ctx: Ctx, uid: str, rec, at=None) -> tuple[bool, str]:
+    ob = open_break(ctx, rec["id"])
+    if not ob:
+        return False, "진행 중인 휴식이 없어요. 휴식을 시작하려면 `/pause`"
+    now = int(ctx.now().timestamp())
+    ts = _at(ctx, at) if at else now
+    if ts <= ob["start_at"] or ts > now:
+        return False, f"복귀 시각은 휴식 시작({hm(ctx, ob['start_at'])}) 이후, 현재 이전이어야 해요."
+    ctx.db.run("UPDATE attendance_breaks SET end_at=? WHERE id=?", (ts, ob["id"]))
+    took = fmt_duration(ts - ob["start_at"])
+    ctx.post(ctx.cfg.attendance_channel, f"▶️ <@{uid}> 복귀 {hm(ctx, ts)} · 휴식 {took}")
+    ctx.refresh_home(uid)
+    return True, f"▶️ 복귀했어요 ({hm(ctx, ts)}) · 휴식 {took}"
+
+
+def pause(ctx: Ctx, uid: str, text: str = "") -> tuple[bool, str]:
+    """휴식 토글. `12:00-13:00` 처럼 범위를 주면 지난 휴식을 기록합니다 (퇴근 후에도 가능)."""
+    at, span, force_end, rest = None, None, False, []
+    for tok in text.split():
+        m = re.fullmatch(r"(\d{1,2}:\d{2})[-~](\d{1,2}:\d{2})", tok)
+        if m and span is None and parse_hhmm(m.group(1)) and parse_hhmm(m.group(2)):
+            span = (parse_hhmm(m.group(1)), parse_hhmm(m.group(2)))
+        elif tok.lower() in PAUSE_END_WORDS and not rest:
+            force_end = True
+        elif parse_hhmm(tok) and at is None and span is None:
+            at = parse_hhmm(tok)
+        else:
+            rest.append(tok)
+    note = " ".join(rest)
+    now = int(ctx.now().timestamp())
+    cur = open_record(ctx, uid)
+
+    if span:
+        rec = cur or ctx.db.one("SELECT * FROM attendance WHERE user_id=? AND date=? ORDER BY in_at DESC LIMIT 1",
+                                (uid, ctx.today().isoformat()))
+        if not rec:
+            return False, "오늘 출근 기록이 없어요. 먼저 `/in 09:00` 처럼 출근을 기록해 주세요."
+        s, e = _at(ctx, span[0]), _at(ctx, span[1])
+        if not (rec["in_at"] <= s < e <= (rec["out_at"] or now)):
+            return False, "휴식은 출근~퇴근(또는 현재) 사이여야 하고, 시작이 끝보다 빨라야 해요."
+        clash = ctx.db.one("SELECT 1 FROM attendance_breaks WHERE att_id=? AND start_at<? AND COALESCE(end_at, ?)>?",
+                           (rec["id"], e, now, s))
+        if clash:
+            return False, "이미 기록된 휴식과 시간이 겹쳐요."
+        ctx.db.run("INSERT INTO attendance_breaks(att_id, start_at, end_at, note) VALUES (?,?,?,?)",
+                   (rec["id"], s, e, note or None))
+        ctx.refresh_home(uid)
+        return True, f"⏸ 휴식 {hm(ctx, s)}~{hm(ctx, e)} 기록했어요 ({fmt_duration(e - s)})" + (f" · {note}" if note else "")
+
+    if not cur:
+        return False, "열려 있는 출근 기록이 없어요. 지난 휴식은 `/pause 12:00-13:00` 처럼 기록할 수 있어요."
+    if force_end or open_break(ctx, cur["id"]):
+        return end_break(ctx, uid, cur, at)
+    ts = _at(ctx, at) if at else now
+    if ts < cur["in_at"] or ts > now:
+        return False, "휴식 시작은 출근 이후, 현재 이전이어야 해요."
+    ctx.db.run("INSERT INTO attendance_breaks(att_id, start_at, note) VALUES (?,?,?)", (cur["id"], ts, note or None))
+    ctx.post(ctx.cfg.attendance_channel, f"⏸ <@{uid}> 휴식 {hm(ctx, ts)}" + (f" · {note}" if note else ""))
+    ctx.refresh_home(uid)
+    return True, f"⏸ 휴식 시작 ({hm(ctx, ts)}) · 복귀할 때 다시 `/pause`" + (f" · {note}" if note else "")
 
 
 def parse_in_args(text: str) -> tuple[str, str, object]:
@@ -125,7 +211,8 @@ def status_of(ctx: Ctx, uid: str, d: date | None = None) -> dict:
     if rows:
         last = rows[-1]
         if last["out_at"] is None:
-            return {"state": "in", "rec": last, "first_in": rows[0]["in_at"], "leave": lv}
+            return {"state": "in", "rec": last, "first_in": rows[0]["in_at"], "leave": lv,
+                    "break": open_break(ctx, last["id"])}
         return {"state": "out", "rec": last, "first_in": rows[0]["in_at"], "leave": lv}
     if lv:
         return {"state": "leave", "leave": lv}
@@ -296,12 +383,15 @@ def team_leaves_blocks(ctx: Ctx, days: int = 14) -> list:
 # ── 현황/리포트 ─────────────────────────────────────────────
 def board_blocks(ctx: Ctx, d: date | None = None) -> list:
     d = d or ctx.today()
-    groups: dict[str, list[str]] = {k: [] for k in ("office", "remote", "out", "leave", "none")}
+    groups: dict[str, list[str]] = {k: [] for k in ("office", "remote", "pause", "out", "leave", "none")}
     for uid in ctx.members():
         st = status_of(ctx, uid, d)
         if st["state"] == "in":
             r = st["rec"]
-            groups[r["mode"]].append(f"<@{uid}> {hm(ctx, st['first_in'])}" + (f" ({r['note']})" if r["note"] else ""))
+            if st.get("break"):
+                groups["pause"].append(f"<@{uid}> {hm(ctx, st['break']['start_at'])}~")
+            else:
+                groups[r["mode"]].append(f"<@{uid}> {hm(ctx, st['first_in'])}" + (f" ({r['note']})" if r["note"] else ""))
         elif st["state"] == "out":
             groups["out"].append(f"<@{uid}> {hm(ctx, st['first_in'])}~{hm(ctx, st['rec']['out_at'])}")
         elif st["state"] == "leave":
@@ -314,7 +404,7 @@ def board_blocks(ctx: Ctx, d: date | None = None) -> list:
     hol = ctx.holiday_name(d)
     if not ctx.is_workday(d):
         title += f" · {hol or '휴일'}"
-    labels = [("office", "🏢 출근"), ("remote", "🏠 재택"),
+    labels = [("office", "🏢 출근"), ("remote", "🏠 재택"), ("pause", "⏸ 휴식"),
               ("out", "🏁 퇴근"), ("leave", "🌴 휴가"), ("none", "⏳ 기록 없음")]
     lines = [f"*{lab}* ({len(groups[k])}) {', '.join(groups[k])}" for k, lab in labels if groups[k]]
     if not ctx.cfg.attendance_channel:
@@ -342,9 +432,9 @@ def summarize(ctx: Ctx, uid: str, start: date, end: date) -> dict:
         if r["mode"] == "remote":
             remote.add(r["date"])
         if r["out_at"]:
-            secs += r["out_at"] - r["in_at"]
+            secs += r["out_at"] - r["in_at"] - break_secs(ctx, r["id"], r["out_at"])
         elif now - r["in_at"] < OPEN_WINDOW:
-            secs += now - r["in_at"]
+            secs += now - r["in_at"] - break_secs(ctx, r["id"], now)
         else:
             missing += 1
     avg_in = None
@@ -383,7 +473,7 @@ def report_blocks(ctx: Ctx, kind: str, target: str | None) -> list:
     return blocks
 
 
-ATT_HEADER = ["날짜", "이름", "Slack ID", "형태", "출근", "퇴근", "근무(시간)", "메모"]
+ATT_HEADER = ["날짜", "이름", "Slack ID", "형태", "출근", "퇴근", "휴식(시간)", "근무(시간)", "메모"]
 LEAVE_HEADER = ["이름", "Slack ID", "종류", "시작", "종료", "일수", "상태", "승인자", "사유"]
 
 
@@ -394,11 +484,14 @@ def month_range(year: int, month: int) -> tuple[date, date]:
 def attendance_rows(ctx: Ctx, start: date, end: date) -> list[list]:
     rows = ctx.db.all("SELECT * FROM attendance WHERE date>=? AND date<=? ORDER BY date, user_id, in_at",
                       (start.isoformat(), end.isoformat()))
+    now = int(ctx.now().timestamp())
     out = []
     for r in rows:
-        hours = round((r["out_at"] - r["in_at"]) / 3600, 2) if r["out_at"] else ""
+        brk = break_secs(ctx, r["id"], r["out_at"] or now)
+        hours = round((r["out_at"] - r["in_at"] - brk) / 3600, 2) if r["out_at"] else ""
         out.append([r["date"], ctx.name(r["user_id"]), r["user_id"], MODES[r["mode"]][1],
-                    hm(ctx, r["in_at"]), hm(ctx, r["out_at"]) if r["out_at"] else "", hours, r["note"] or ""])
+                    hm(ctx, r["in_at"]), hm(ctx, r["out_at"]) if r["out_at"] else "",
+                    round(brk / 3600, 2) if brk else "", hours, r["note"] or ""])
     return out
 
 
@@ -502,6 +595,21 @@ def register(app, ctx: Ctx) -> None:
             return respond(HELP)
         mode, note, at = parse_in_args(text)
         respond(clock_in(ctx, command["user_id"], mode, note, at)[1])
+
+    @app.command("/pause")
+    def cmd_pause(ack, command, respond):
+        ack()
+        text = (command.get("text") or "").strip()
+        if text in ("help", "도움말"):
+            return respond(HELP)
+        respond(pause(ctx, command["user_id"], text)[1])
+
+    @app.action("att_pause")
+    def act_pause(ack, body, respond):
+        ack()
+        uid = body["user"]["id"]
+        ok, msg = pause(ctx, uid)
+        _reply(ctx, body, respond, uid, ok, msg)
 
     @app.command("/out")
     def cmd_out(ack, command, respond):

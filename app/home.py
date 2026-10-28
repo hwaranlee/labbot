@@ -16,14 +16,17 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     b: list = [header("🧪 LabBot")]
     hol = ctx.holiday_name(today)
     b.append(context(f"{att.fmt_day(today)}" + (f" · {hol}" if hol else "")
-                     + " · 명령어: `/todo` `/in` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/gpu` `/server`"))
+                     + " · 명령어: `/todo` `/in` `/pause` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/gpu` `/server`"))
 
     # 근태
     st = att.status_of(ctx, uid)
     if st["state"] == "in":
         icon, label = att.MODES[st["rec"]["mode"]]
         txt = f"{icon} {label} 중 · {att.hm(ctx, st['first_in'])}부터"
-        btns = [button("🏁 퇴근", "att_out", style="primary")]
+        btns = [button("🏁 퇴근", "att_out", style="primary"), button("⏸ 휴식", "att_pause")]
+        if st.get("break"):
+            txt = f"⏸ 휴식 중 · {att.hm(ctx, st['break']['start_at'])}부터 ({label} {att.hm(ctx, st['first_in'])}~)"
+            btns = [button("▶️ 복귀", "att_pause", style="primary"), button("🏁 퇴근", "att_out")]
     elif st["state"] == "out":
         txt = f"🏁 퇴근함 · {att.hm(ctx, st['first_in'])} ~ {att.hm(ctx, st['rec']['out_at'])}"
         btns = [button("🏢 다시 출근", "att_in_office", "office")]

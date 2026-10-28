@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS attendance (
 CREATE INDEX IF NOT EXISTS idx_att_user_date ON attendance(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
 
+CREATE TABLE IF NOT EXISTS attendance_breaks (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    att_id   INTEGER NOT NULL,           -- attendance.id
+    start_at INTEGER NOT NULL,
+    end_at   INTEGER,                    -- NULL이면 휴식 중
+    note     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_breaks_att ON attendance_breaks(att_id);
+
 CREATE TABLE IF NOT EXISTS leaves (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     TEXT NOT NULL,
