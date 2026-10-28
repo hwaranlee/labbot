@@ -91,6 +91,7 @@ sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu2 /,/hom
 sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volume1
 ```
 
+* **sudo 권한이 없는 서버**에서는 같은 인자로 `bash ./install-agent-user.sh ...`를 쓰세요. 내 계정의 systemd 사용자 서비스(안 되면 crontab)로 등록하고, root 없이도 모든 사용자의 GPU 프로세스를 볼 수 있습니다.
 * 네 번째 인자는 감시할 디스크 경로이고, 서버마다 실제 마운트 경로로 바꿔 주세요 (`df -h`로 확인).
 * 설치가 끝나면 수집 결과가 한 번 출력됩니다. 1~2분 뒤 Slack에서 `/gpu`를 입력해 확인하세요.
 * GPU 프로세스의 사용자가 `?`로 보이면 `/etc/systemd/system/labbot-agent.service`에서 `User=nobody` 줄을 지우고 `sudo systemctl daemon-reload && sudo systemctl restart labbot-agent`를 실행하세요.
