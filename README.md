@@ -61,7 +61,7 @@ docker compose up -d --build
 docker compose logs -f    # "LabBot 시작"이 보이면 성공
 ```
 
-### 방법 B: systemd + Python 3.9 이상
+### 방법 B: systemd + Python 3.10 이상
 
 ```bash
 sudo useradd -r -m -d /opt/labbot labbot

@@ -226,11 +226,11 @@ def _llm_select(ctx: Ctx, cands: list[dict], topic_queries: list[str], top_n: in
     schema = {"type": "object", "properties": {"papers": {"type": "array", "items": {
         "type": "object",
         "properties": {"id": {"type": "string", "enum": list(by_id)},
-                       "relevance": {"type": "integer", "minimum": 0, "maximum": 10},
+                       "relevance": {"type": "integer", "description": "0~10"},
                        "summary": {"type": "string"}, "why": {"type": "string"}},
         "required": ["id", "relevance", "summary", "why"]}}}, "required": ["papers"]}
     out = ctx.llm.structured(SELECT_SYSTEM, prompt, "pick_papers", "선별한 논문과 요약을 저장한다.", schema,
-                             max_tokens=6000)
+                             max_tokens=16000)
     picks, seen = [], set()
     for r in sorted(out.get("papers", []), key=lambda x: x.get("relevance", 0), reverse=True):
         p = by_id.get(r.get("id"))
@@ -253,7 +253,7 @@ def detail(ctx: Ctx, pid: str) -> str:
     head = f"*<{row['url']}|{esc(row['title'])}>*\n{esc(_authors(row['authors']))}\n\n"
     if ctx.llm and ctx.llm.available:
         try:
-            body = ctx.llm.text(DETAIL_SYSTEM, f"제목: {row['title']}\n\n초록:\n{row['abstract']}", max_tokens=1200)
+            body = ctx.llm.text(DETAIL_SYSTEM, f"제목: {row['title']}\n\n초록:\n{row['abstract']}", max_tokens=8000)
             text = head + body + "\n_초록 기반 요약이에요._"
             ctx.db.run("UPDATE papers SET detail=? WHERE id=?", (text, pid))
             return text
