@@ -488,6 +488,19 @@ def test_idle_gpu_alert_and_offline(env):
     assert any("데이터가 오지 않아요" in a["text"] for a in env.client.of("chat.postMessage"))
 
 
+def test_gpu_forget_renamed_host(env):
+    env.mon.ingest(payload("old-name"))
+    env.mon.latest["old-name"]["recv"] -= 600
+    env.mon.watch()
+    env.command("/gpu", "forget old-name")
+    assert "관리자만" in env.responded[-1]["text"]
+    env.command("/gpu", "forget old-name", user=BOSS)
+    assert "지웠어요" in env.responded[-1]["text"]
+    assert "old-name" not in env.mon.latest and "old-name" not in env.mon.offline_alerted
+    env.command("/gpu", "forget nope", user=BOSS)
+    assert "목록에 없어요" in env.responded[-1]["text"]
+
+
 def test_disk_alert(env):
     env.mon.ingest(payload(disk_used=95))
     env.mon.watch()

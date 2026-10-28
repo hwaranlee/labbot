@@ -31,7 +31,7 @@ HELP = """*📚 /papers 사용법*
 • `/papers list` 주제 보기·삭제 · `/papers delete 3`
 • `/papers profile &lt;연구실 소개 몇 문장&gt;` 관련도 판단 기준 설정 (관리자)
 • `/papers search test-time scaling` — 최근 2주 논문 바로 찾아 요약
-• `/papers summary 2609.12345` — 특정 arXiv 논문 자세히 요약
+• `/papers summary 2609.12345` — LabBot이 소개한 논문 자세히 요약
 • `/papers now` — 다이제스트 바로 실행 (관리자)
 • 매일 아침 새 논문 Top N, 매주 금요일 이번 주 Top N을 보내 드려요. 📌 버튼으로 읽을 목록(Todo)에 담을 수 있어요."""
 
@@ -118,10 +118,6 @@ def arxiv_search(query: str, categories: str = "", max_results: int = 50) -> lis
     return parse_arxiv(http_get(ARXIV_API + "?" + urllib.parse.urlencode(params)))
 
 
-def arxiv_by_ids(ids: list[str]) -> list[dict]:
-    return parse_arxiv(http_get(ARXIV_API + "?" + urllib.parse.urlencode({"id_list": ",".join(ids)})))
-
-
 def hf_daily(day: date) -> list[dict]:
     try:
         data = json.loads(http_get(f"{HF_API}?date={day.isoformat()}"))
@@ -203,16 +199,19 @@ def select(ctx: Ctx, candidates: list[dict], topic_queries: list[str], top_n: in
     """후보 중 top_n개를 골라 summary/why/score를 붙입니다."""
     if not candidates:
         return []
+    err = ""
     if ctx.llm and ctx.llm.available:
         try:
             return _llm_select(ctx, candidates[:40], topic_queries, top_n)
         except LLMError as e:
             log.warning("LLM 선별 실패, 키워드 점수로 대체: %s", e)
+            err = str(e)
     picks = []
     for p in candidates[:top_n]:
         hit = [ph for q in topic_queries for ph in phrases(q) if _match(p, ph)]
         picks.append({**p, "score": round(p["h"], 1), "summary": first_sentences(p["abstract"]),
-                      "why": ("주제: " + ", ".join(dict.fromkeys(hit))) if hit else "", "by": "rule"})
+                      "why": ("주제: " + ", ".join(dict.fromkeys(hit))) if hit else "", "by": "rule",
+                      "llm_error": err})
     return picks
 
 
@@ -243,18 +242,14 @@ def _llm_select(ctx: Ctx, cands: list[dict], topic_queries: list[str], top_n: in
 
 
 def detail(ctx: Ctx, pid: str) -> str:
-    row = ctx.db.one("SELECT * FROM papers WHERE id=?", (pid,))
-    if row and row["detail"]:
-        return row["detail"]
+    """봇이 소개한 논문(다이제스트·검색 결과)만 자세히 요약합니다. 아무 arXiv 논문이나 요약하지 않음."""
+    row = ctx.db.one("SELECT p.* FROM papers p WHERE p.id=? AND EXISTS"
+                     " (SELECT 1 FROM paper_posts pp WHERE pp.paper_id=p.id)", (pid,))
     if not row:
-        found = arxiv_by_ids([pid])
-        if not found:
-            return f"arXiv에서 `{pid}` 논문을 찾지 못했어요."
-        p = found[0]
-        ctx.db.run("INSERT OR IGNORE INTO papers(id, title, authors, abstract, url, published, first_seen)"
-                   " VALUES (?,?,?,?,?,?,?)", (p["id"], p["title"], ", ".join(p["authors"]), p["abstract"],
-                                               p["url"], p["published"], int(_time.time())))
-        row = ctx.db.one("SELECT * FROM papers WHERE id=?", (pid,))
+        return (f"`{pid}` 는 LabBot이 소개한 논문이 아니라서 요약할 수 없어요. "
+                "다이제스트나 `/papers search` 결과에 나온 논문만 요약해요.")
+    if row["detail"]:
+        return row["detail"]
     head = f"*<{row['url']}|{esc(row['title'])}>*\n{esc(_authors(row['authors']))}\n\n"
     if ctx.llm and ctx.llm.available:
         try:
@@ -270,6 +265,14 @@ def detail(ctx: Ctx, pid: str) -> str:
 def _authors(a) -> str:
     names = [x.strip() for x in (a if isinstance(a, str) else ", ".join(a)).split(",") if x.strip()]
     return ", ".join(names[:3]) + (f" 외 {len(names) - 3}명" if len(names) > 3 else "")
+
+
+def fallback_note(pick: dict) -> str:
+    if pick.get("by") == "llm":
+        return ""
+    if pick.get("llm_error"):
+        return f"⚠️ Claude API 호출에 실패해서 키워드 기준으로 골랐어요: `{pick['llm_error'][:300]}`"
+    return "ANTHROPIC_API_KEY를 설정하면 Claude가 관련도를 판단하고 한국어로 요약해요."
 
 
 def paper_blocks(picks: list[dict], heading: str, note: str = "") -> list:
@@ -315,7 +318,7 @@ def run_digest(ctx: Ctx, target: str, days: int, heading: str) -> list[dict]:
     now = int(_time.time())
     ctx.db.many("INSERT OR IGNORE INTO paper_posts(paper_id, target, posted_at, score, summary, why)"
                 " VALUES (?,?,?,?,?,?)", [(p["id"], target, now, p["score"], p["summary"], p["why"]) for p in picks])
-    note = "" if picks[0].get("by") == "llm" else "ANTHROPIC_API_KEY를 설정하면 Claude가 관련도를 판단하고 한국어로 요약해요."
+    note = fallback_note(picks[0])
     blocks = paper_blocks(picks, heading, note)
     if target == "lab":
         ctx.post(ctx.cfg.paper_channel, heading, blocks)
@@ -422,6 +425,10 @@ def register(app, ctx: Ctx) -> None:
             picks = select(ctx, cands, [q], ctx.cfg.paper_top_n)
             if not picks:
                 return respond(f"최근 2주 동안 '{q}' 관련 논문을 찾지 못했어요.")
+            # 검색 결과도 '소개한 논문'으로 남겨 🔍 자세히·/papers summary가 되도록 (target='search'는 다이제스트와 무관)
+            ctx.db.many("INSERT OR IGNORE INTO paper_posts(paper_id, target, posted_at, score, summary, why)"
+                        " VALUES (?,?,?,?,?,?)",
+                        [(p["id"], "search", int(_time.time()), p["score"], p["summary"], p["why"]) for p in picks])
             return respond(text=f"'{q}' 검색 결과", blocks=paper_blocks(picks, f"🔎 '{q}' 최근 2주 Top {len(picks)}"))
         if sub in ("summary", "detail", "요약"):
             m = re.search(r"(\d{4}\.\d{4,5})", rest)

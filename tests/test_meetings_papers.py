@@ -354,8 +354,11 @@ def test_papers_commands(env, fake_sources):
     assert env.ctx.db.get_setting("lab_profile") == "비디오 생성 연구"
     env.command("/papers", "search video diffusion")
     assert "검색 결과" in env.responded[-1]["text"]
-    env.command("/papers", "summary https://arxiv.org/abs/2609.00002v1")
-    assert "Diffusion for Robots" in env.responded[-1]["text"]
+    env.command("/papers", "summary 2601.99999")  # 소개한 적 없는 논문은 요약하지 않음
+    assert "소개한 논문이 아니라서" in env.responded[-1]["text"]
+    picked = env.ctx.db.one("SELECT paper_id FROM paper_posts WHERE target='search'")["paper_id"]
+    env.command("/papers", f"summary https://arxiv.org/abs/{picked}v1")
+    assert "arxiv" in env.responded[-1]["text"] and "소개한 논문이 아니라서" not in env.responded[-1]["text"]
     env.command("/papers", "add robot policy")
     tid = env.ctx.db.one("SELECT max(id) i FROM paper_topics")["i"]
     env.command("/papers", f"delete {tid}", user=KIM)
@@ -400,3 +403,11 @@ def test_find_person_english_names(env, monkeypatch):
     who, rest = meetings.find_person(env.ctx, "li: rerun baselines", [KIM, ME])
     assert who == KIM and rest == "rerun baselines"
     assert meetings.find_person(env.ctx, "@HWARAN write intro", [KIM, ME])[0] == ME
+
+
+def test_fallback_note_distinguishes_missing_key_and_api_error():
+    from app import papers
+    assert papers.fallback_note({"by": "llm"}) == ""
+    assert "ANTHROPIC_API_KEY" in papers.fallback_note({"by": "rule", "llm_error": ""})
+    note = papers.fallback_note({"by": "rule", "llm_error": "credit balance is too low"})
+    assert "호출에 실패" in note and "credit balance" in note

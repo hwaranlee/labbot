@@ -21,6 +21,7 @@ HELP = """*🖥 서버 명령어*
 • `/gpu reserve gpu1 0,1 3h paper experiment` — GPU 예약 (`0-3`, `all` 가능 / 기간 `90m` `3h` `2d`)
 • `/gpu release` 내 예약 모두 해제 · `/gpu release 12` · `/gpu mine` 내 예약 보기
 • `/gpu link kim` — 내 Slack 계정을 리눅스 계정 `kim`과 연결 (알림·통계에 사용)
+• `/gpu forget old-name` — 이름을 바꿨거나 없앤 서버를 현황에서 지우기 (관리자)
 • `/gpu summary` 어제 사용량 요약 · `/gpu today` 오늘 · `/server` CPU·메모리·디스크 현황
 • `/gpu week` 지난주 리포트 (예약 vs 실제 사용) · `/gpu week now` 이번 주 · `/gpu week sheet` 지난주를 Google Sheet에 기록 (관리자)"""
 
@@ -104,6 +105,18 @@ class Monitor:
         with self.lock:
             items = sorted(self.latest.items())
         return [(h, v["data"], now - v["recv"] <= self.ctx.cfg.offline_minutes * 60) for h, v in items]
+
+    def forget(self, host: str) -> bool:
+        """현황 목록과 알림 상태에서 서버를 지웁니다. 지난 사용 기록(통계)은 남깁니다."""
+        with self.lock:
+            if self.latest.pop(host, None) is None:
+                return False
+            for key in [k for k in self.idle if k[0] == host]:
+                del self.idle[key]
+            self.offline_alerted.discard(host)
+            for key in [k for k in self.disk_alerted if k[0] == host]:
+                del self.disk_alerted[key]
+        return True
 
     def link_of(self, linux_user: str) -> str | None:
         r = self.ctx.db.one("SELECT slack_id FROM user_links WHERE linux_user=?", (linux_user,))
@@ -495,6 +508,15 @@ def register(app, ctx: Ctx, mon: Monitor) -> None:
                 target = m.group(1)
             ctx.db.run("INSERT OR REPLACE INTO user_links(linux_user, slack_id) VALUES (?,?)", (rest[0], target))
             return respond(f"🔗 리눅스 계정 `{rest[0]}` ↔ <@{target}> 연결했어요.")
+        if sub in ("forget", "remove", "삭제"):
+            if not ctx.is_admin(uid):
+                return respond("서버 삭제는 관리자만 할 수 있어요.")
+            if not rest:
+                return respond("형식: `/gpu forget 서버이름`")
+            if not mon.forget(rest[0]):
+                names = ", ".join(h for h, _, _ in mon.hosts()) or "없음"
+                return respond(f"`{rest[0]}` 서버가 목록에 없어요. 현재 목록: {names}")
+            return respond(f"🗑 `{rest[0]}` 를 서버 목록에서 지웠어요. 에이전트가 다시 보내면 다시 나타나요.")
         if sub in ("summary", "요약", "report"):
             return respond(text="사용 요약", blocks=mon.summary_blocks(ctx.today() - timedelta(days=1)))
         if sub in ("today", "오늘"):

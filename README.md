@@ -177,6 +177,7 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 | `/gpu week` · `/gpu week now` | 지난주 · 이번 주 GPU 리포트 (예약 vs 실제 사용량) |
 | `/gpu week sheet` | 지난주 통계를 Google Sheet에 기록 (관리자, 이미 기록했으면 건너뜀. `force`로 다시 기록) |
 | `/server` | 서버별 CPU, 메모리, 디스크 |
+| `/gpu forget old-name` | 이름을 바꿨거나 없앤 서버를 현황에서 지우기 (관리자, 지난 통계는 유지) |
 
 자동 알림 (`#서버알림`)
 * 💤 **GPU 메모리만 잡고 쓰지 않는 프로세스**: 사용률 5% 이하 상태가 60분 넘게 이어지면 채널에 알리고, 계정이 연결된 본인에게 DM을 보냅니다. 남아 있는 주피터 커널을 잡는 데 유용합니다.
@@ -219,7 +220,7 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 | `/papers profile <연구실 소개>` | Claude가 관련도를 판단할 기준 (관리자) |
 | `/papers list` · `/papers delete 3` | 주제 보기·삭제 |
 | `/papers search test-time scaling` | 최근 2주 논문을 바로 찾아 요약 |
-| `/papers summary 2609.12345` | 특정 논문을 문제·방법·결과·한계로 자세히 요약 |
+| `/papers summary 2609.12345` | LabBot이 소개한 논문(다이제스트·검색 결과)을 문제·방법·결과·한계로 자세히 요약. 그 밖의 논문은 요약하지 않습니다 |
 | `/papers now` | 다이제스트 바로 실행 (관리자, 설정 확인용) |
 
 * **매일 평일 08:30**: 주제별 arXiv 신규 논문과 **Hugging Face Daily Papers**(커뮤니티 추천 수 🔥)를 모아서 Claude가 연구실 관점의 관련도(0~10)를 매기고, Top 5를 한국어 요약과 함께 `#논문`에 올립니다.
