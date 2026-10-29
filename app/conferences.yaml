@@ -1,0 +1,153 @@
+# 학회 초기 목록 — 봇을 처음 실행할 때 한 번만 읽습니다. 그 뒤로는 DB가 기준이고,
+# Slack(/deadline conf ..., /deadline set ...)에서 고친 내용은 이 파일에 반영되지 않습니다.
+# 현재 상태를 yaml로 받으려면 /deadline conf export
+#
+# 날짜는 공식 사이트에서 확인한 것만 넣었습니다 (확인일: 2026-10-29). 각 날짜 옆 주석이 출처입니다.
+# 출처에 날짜만 있고 시각이 없으면 23:59로 두고 note에 그 사실을 적었습니다. 꼭 검토해 주세요.
+#
+# review_type: direct    학회에 바로 투고
+#              arr       ARR 주기를 거쳐 commit (kind=commitment 마감)
+#              arr_cycle ARR 주기 자체 (kind=arr_cycle 마감, commit_to로 commit 가능한 학회 연결)
+# kind: abstract | paper | supplementary | arr_cycle | commitment
+# at: "YYYY-MM-DD HH:MM" (timezone 기준 현지 시각). timezone을 비우면 학회 기본 시간대
+
+conferences:
+  # ── NLP (ARR 계열) ───────────────────────────────────
+  - name: ACL
+    group: NLP
+    url: https://www.aclweb.org/portal/   # TODO: 2027 학회 사이트가 열리면 교체
+    review_type: arr
+    timezone: AoE
+    # TODO: ACL 2027 commitment 마감 미발표. ARR 페이지에는 "ACL 2027 · January, 2027"만 있음
+    #       (https://aclrollingreview.org/dates). 발표되면 /deadline set ACL 2027 commitment ...
+    deadlines: []
+
+  - name: EMNLP
+    group: NLP
+    url: https://www.aclweb.org/portal/
+    review_type: arr
+    timezone: AoE
+    # TODO: EMNLP 2027 일정 미발표.
+    deadlines:
+      - {year: 2026, kind: commitment, at: "2026-08-02 23:59",  # https://aclrollingreview.org/dates
+         note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  - name: NAACL
+    group: NLP
+    url: https://2027.naacl.org/
+    review_type: arr
+    timezone: AoE
+    deadlines:
+      # "All deadlines are 11:59 p.m. UTC -12h (anywhere on earth)"
+      - {year: 2027, kind: commitment, at: "2026-12-23 23:59",  # https://2027.naacl.org/calls/main_conference_papers/
+         url: "https://2027.naacl.org/calls/main_conference_papers/"}
+
+  - name: EACL
+    group: NLP
+    url: https://www.aclweb.org/portal/
+    review_type: arr
+    timezone: AoE
+    deadlines:
+      - {year: 2027, kind: commitment, at: "2026-10-11 23:59",  # https://aclrollingreview.org/dates
+         note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  - name: AACL
+    group: NLP
+    url: https://www.aclweb.org/portal/
+    review_type: arr
+    timezone: AoE
+    # TODO: AACL 다음 회차 일정 미발표.
+    deadlines:
+      - {year: 2026, kind: commitment, at: "2026-08-02 23:59",  # https://aclrollingreview.org/dates
+         note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  # ── ARR 주기 ─────────────────────────────────────────
+  # 출처: https://aclrollingreview.org/dates — 투고 마감 날짜만 있고 시각은 없음.
+  - name: ARR 2026 May
+    group: ARR
+    url: https://aclrollingreview.org/dates
+    review_type: arr_cycle
+    timezone: AoE
+    commit_to: [EMNLP, AACL]
+    deadlines:
+      - {year: 2026, kind: arr_cycle, at: "2026-05-25 23:59",  # https://aclrollingreview.org/dates
+         note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  - name: ARR 2026 Aug
+    group: ARR
+    url: https://aclrollingreview.org/dates
+    review_type: arr_cycle
+    timezone: AoE
+    commit_to: [EACL]
+    deadlines:
+      - {year: 2026, kind: arr_cycle, at: "2026-08-03 23:59",  # https://aclrollingreview.org/dates
+         note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  - name: ARR 2026 Oct
+    group: ARR
+    url: https://aclrollingreview.org/dates
+    review_type: arr_cycle
+    timezone: AoE
+    commit_to: [NAACL]   # COLING 2027도 이 주기를 씀 (목록에 없어서 연결 안 함)
+    deadlines:
+      # NAACL 2027 CFP에 "ARR submission deadline October 12, 2026", 11:59 p.m. AoE 명시
+      - {year: 2026, kind: arr_cycle, at: "2026-10-12 23:59",  # https://2027.naacl.org/calls/main_conference_papers/
+         url: "https://aclrollingreview.org/dates"}
+
+  - name: ARR 2027 Jan
+    group: ARR
+    url: https://aclrollingreview.org/dates
+    review_type: arr_cycle
+    timezone: AoE
+    commit_to: [ACL]
+    # TODO: ARR 페이지에 "ACL 2027 · January, 2027"만 있고 날짜는 미발표.
+    deadlines: []
+
+  # ── ML ───────────────────────────────────────────────
+  - name: NeurIPS
+    group: ML
+    url: https://neurips.cc/
+    review_type: direct
+    timezone: AoE
+    # TODO: NeurIPS 2027 일정 미발표 (https://neurips.cc/Conferences/2027/Dates 404, 2026-10-29 기준).
+    deadlines: []
+
+  - name: ICLR
+    group: ML
+    url: https://iclr.cc/
+    review_type: direct
+    timezone: AoE
+    deadlines:
+      # "all times are UTC-12h, aka Anywhere on Earth" — 시각은 미표기라 23:59로 둠
+      - {year: 2027, kind: abstract, at: "2026-09-18 23:59",  # https://iclr.cc/Conferences/2027/CallForPapers
+         url: "https://iclr.cc/Conferences/2027/Dates", note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+      - {year: 2027, kind: paper, at: "2026-09-25 23:59",  # https://iclr.cc/Conferences/2027/CallForPapers
+         url: "https://iclr.cc/Conferences/2027/Dates", note: "출처에 시각 미표기 (23:59 AoE로 가정)"}
+
+  - name: ICML
+    group: ML
+    url: https://icml.cc/
+    review_type: direct
+    timezone: AoE
+    # TODO: ICML 2027 일정 미발표 (https://icml.cc/Conferences/2027/Dates 404, 2026-10-29 기준).
+    deadlines: []
+
+  # ── 음성 ─────────────────────────────────────────────
+  - name: Interspeech
+    group: Speech
+    url: https://isca-speech.org/
+    review_type: direct
+    timezone: AoE
+    # TODO: Interspeech 2027 일정 미발표. 2027 공식 사이트가 열리면 url도 바꿔 주세요.
+    deadlines: []
+
+  - name: ICASSP
+    group: Speech
+    url: https://2027.ieeeicassp.org/
+    review_type: direct
+    timezone: AoE
+    deadlines:
+      # 공식 CFP 페이지 "Full Paper Submission Deadline September 23, 2026" (시각·시간대 미표기).
+      # 이전 CFP PDF와 다른 사이트에는 9/16, 9/17도 있음 — 연장된 날짜로 보임.
+      - {year: 2027, kind: paper, at: "2026-09-23 23:59",  # https://2027.ieeeicassp.org/?p=3718
+         url: "https://2027.ieeeicassp.org/?p=3718", note: "출처에 시각·시간대 미표기 (23:59 AoE로 가정)"}

@@ -5,3 +5,4 @@ holidays>=0.40
 python-dotenv>=1.0
 anthropic>=2.0
 gspread>=6.0
+PyYAML>=6.0

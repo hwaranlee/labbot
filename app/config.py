@@ -90,6 +90,13 @@ class Config:
     paper_min_score: int = 6             # LLM 관련도(0~10) 이 값 미만은 제외
     paper_window_days: int = 3
 
+    # 학회 마감
+    deadline_channel: str = ""           # 월요일 6주 마감 요약 (비우면 안 올림)
+    deadline_remind: time = time(9, 0)   # 목표 학회 D-n 알림 시각
+    deadline_weekly_day: str = "mon"
+    deadline_weekly: time = time(9, 0)
+    deadline_seed_file: str = ""         # 비우면 app/conferences.yaml (첫 실행에만 읽음)
+
 
 def load_config() -> Config:
     load_dotenv()
@@ -109,6 +116,11 @@ def load_config() -> Config:
         paper_top_n=_int("PAPER_TOP_N", 5),
         paper_min_score=_int("PAPER_MIN_SCORE", 6),
         paper_window_days=_int("PAPER_WINDOW_DAYS", 3),
+        deadline_channel=os.environ.get("DEADLINE_CHANNEL", ""),
+        deadline_remind=_time("DEADLINE_REMIND", "09:00"),
+        deadline_weekly_day=os.environ.get("DEADLINE_WEEKLY_DAY", "mon").lower(),
+        deadline_weekly=_time("DEADLINE_WEEKLY", "09:00"),
+        deadline_seed_file=os.environ.get("DEADLINE_SEED_FILE", ""),
         bot_token=os.environ.get("SLACK_BOT_TOKEN", ""),
         app_token=os.environ.get("SLACK_APP_TOKEN", ""),
         tz=ZoneInfo(os.environ.get("TZ_NAME", "Asia/Seoul")),

@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from . import attendance, gpureport, home, meetings, papers, servers, todo
+from . import attendance, deadlines, gpureport, home, meetings, papers, servers, todo
 from .config import Config, load_config
 from .ctx import Ctx
 from .db import DB
@@ -34,6 +34,7 @@ def create_app(cfg: Config, verify_token: bool = True, client=None, sync: bool =
     servers.register(app, ctx, mon)
     meetings.register(app, ctx)
     papers.register(app, ctx)
+    deadlines.register(app, ctx)
     home.register(app, ctx, mon)
     return app, ctx, mon
 
@@ -72,6 +73,10 @@ def start_scheduler(ctx: Ctx, mon: servers.Monitor) -> BackgroundScheduler:
                   misfire_grace_time=3600)
     sched.add_job(safe(lambda: papers.weekly_job(ctx)), at(c.paper_weekly, c.paper_weekly_day), id="papers_weekly",
                   misfire_grace_time=3600)
+    sched.add_job(safe(lambda: deadlines.reminder_job(ctx)), at(c.deadline_remind), id="deadline_reminders",
+                  misfire_grace_time=3600)
+    sched.add_job(safe(lambda: deadlines.weekly_job(ctx)), at(c.deadline_weekly, c.deadline_weekly_day),
+                  id="deadline_weekly", misfire_grace_time=3600)
     sched.add_job(safe(mon.prune_job), CronTrigger(hour=4, minute=0, timezone=ctx.tz), id="prune")
     sched.start()
     return sched

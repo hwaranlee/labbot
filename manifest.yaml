@@ -52,6 +52,10 @@ features:
       description: 논문 구독 주제·검색·요약
       usage_hint: "[add keywords cat:cs.CV|add-mine|list|delete 3|profile|search keywords|summary 2609.12345|now]"
       should_escape: false
+    - command: /deadline
+      description: 학회 마감 D-day · 목표 학회 알림 · 학회 목록 관리
+      usage_hint: "[target ICLR title|untarget ICLR|mine|targets|set ICLR 2027 paper 2026-10-01 23:59 AoE|unset ICLR 2027 abstract|conf list|conf add|conf edit KDD|help]"
+      should_escape: false
     - command: /gpu
       description: GPU 현황·예약
       usage_hint: "[free|reserve gpu1 0,1 3h|release|mine|link linux-user|summary|today|week]"

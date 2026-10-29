@@ -37,11 +37,12 @@
    * `#서버알림`: 디스크, GPU, 서버 다운 알림과 일일 요약이 올라갑니다.
    * `#논문`: 매일·매주 논문 다이제스트가 올라갑니다.
    * `#미팅` (선택): 공유를 선택한 미팅 정리와 금요일 연구실 전체 action items 현황이 올라갑니다.
+   * 연구실 채널 (선택): 매주 월요일 학회 마감 요약이 올라갑니다 (`DEADLINE_CHANNEL`).
 6. ID 확인 방법
    * 채널 ID: 채널 이름 클릭 → 맨 아래 `C0...`
    * 사람 ID: 프로필 → `⋮` → **멤버 ID 복사** (`U0...`)
 
-> **이미 앱을 만들었다면** 새 `manifest.yaml`로 앱 설정의 **App Manifest**를 덮어쓰고 저장한 뒤, **Install App → Reinstall** 해 주세요. `/meeting`·`/papers` 명령과 스레드를 읽는 권한(`channels:history`)이 추가됐습니다.
+> **이미 앱을 만들었다면** 새 `manifest.yaml`로 앱 설정의 **App Manifest**를 덮어쓰고 저장한 뒤, **Install App → Reinstall** 해 주세요. `/deadline`·`/meeting`·`/papers` 명령과 스레드를 읽는 권한(`channels:history`)이 추가됐습니다.
 
 ### Claude API 키 (미팅 정리·논문 요약용)
 
@@ -235,6 +236,43 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 * 한 번 소개한 논문은 다시 보내지 않습니다.
 * 요약은 **초록을 근거로** 합니다. 본문 PDF는 읽지 않습니다.
 
+### 🎯 학회 마감
+| 명령 | 설명 |
+|---|---|
+| `/deadline` | 앞으로 90일 안의 마감 (D-day 순). 날짜가 아직 없는 학회도 아래에 표시 |
+| `/deadline target ICLR Efficient DiT` | 내 목표 학회 등록 (논문 제목은 선택). D-30·14·7·3·1·당일 오전 9시에 DM |
+| `/deadline untarget ICLR` · `/deadline mine` | 목표 해제 · 내 목표 학회와 D-day |
+| `/deadline targets` | 누가 어느 학회를 준비 중인지 한눈에 |
+| `/deadline set ICLR 2027 paper 2026-10-01 23:59 AoE` | 마감 추가·수정. 시각을 빼면 23:59, 시간대를 빼면 학회 기본 시간대 |
+| `/deadline unset ICLR 2027 abstract` | 마감 삭제 |
+| `/deadline conf list` | 그룹별 학회 목록과 다음 마감 |
+| `/deadline conf add` | 입력 창으로 학회 추가. 빠른 추가: `/deadline conf add KDD group:ML url:https://kdd.org tz:AoE` |
+| `/deadline conf edit KDD` | 학회 정보와 **마감 목록**을 입력 창에서 수정 (줄을 지우면 그 마감 삭제) |
+| `/deadline conf remove KDD` | 확인 창에서 목표로 등록한 사람을 보여 준 뒤 삭제. 관련 목표와 알림도 함께 정리하고, 그분들께 DM |
+| `/deadline conf watch KDD` · `unwatch` | 월요일 채널 요약에 포함할지 |
+| `/deadline conf export` | 현재 목록과 마감을 yaml 파일로 DM (백업·이전용) |
+
+* **마감 종류:** `abstract` `paper` `supplementary` `arr_cycle` `commitment`. 초록 마감은 본 마감보다 먼저, 굵게 표시합니다.
+* **시간대:** `AoE`(UTC-12) `UTC-7` `UTC+5:30` `KST` `PT` `America/Los_Angeles` 등. 모든 시각은 KST로 바꿔 보여 주고 원래 시간대도 함께 적습니다.
+  예: `ICLR 2027 논문 마감 · 10/2(금) 20:59 KST (AoE 10/1 23:59) · D-7` (AoE 23:59는 KST로 다음 날 20:59)
+* **ARR 학회** (ACL, EMNLP, NAACL, EACL, AACL)
+  * ARR 주기(`ARR 2027 Jan` 같은 항목, 종류 `arr_cycle`)와 학회의 `commitment` 마감을 따로 관리합니다.
+  * 각 ARR 주기에 "이 주기 결과로 commit할 수 있는 학회"를 연결합니다. 연결은 `/deadline conf edit ARR 2027 Jan` 입력 창에서 고칩니다.
+  * ARR 학회를 목표로 등록하면 **가장 가까운 ARR 주기 투고 마감과 commitment 마감을 둘 다** 알려 줍니다.
+  * 새 주기 추가 예: `/deadline conf add ARR 2027 Feb group:ARR type:arr_cycle commit:ACL,EMNLP` 다음 `/deadline set ARR 2027 Feb arr_cycle 2027-02-15 23:59`
+* **권한:** 학회 추가는 누구나 할 수 있습니다. 수정·삭제·watch 변경·마감 추가는 그 학회를 추가한 사람이나 관리자(`ADMIN_IDS`)만 할 수 있습니다. 초기 목록의 학회는 관리자만 고칠 수 있습니다.
+* 학회 이름은 대소문자와 공백을 무시하고 찾습니다 (`iclr` = `ICLR`). 오타가 있으면 "혹시 *ICLR*?" 처럼 제안합니다.
+* **알림**
+  * 마감 날짜가 바뀌거나 새로 등록되면 목표로 등록한 사람에게 바로 DM이 갑니다 (예: "ICLR 2027 논문 마감 이 10/1 → 10/3으로 바뀌었어요").
+  * 같은 마감에 대한 알림은 하루에 한 번만 갑니다. 이미 지난 마감은 알리지 않습니다.
+  * 매주 월요일 09:00 `DEADLINE_CHANNEL`에 앞으로 6주 안의 마감을 요약합니다 (watch가 켜진 학회만, 마감이 없으면 올리지 않음).
+  * 금요일 미팅 주간 정리와 App Home에도 "목표 학회까지 D-n"이 표시됩니다.
+  * 모든 알림에는 공식 사이트 링크와 "공식 사이트에서 날짜를 꼭 확인하세요" 문구가 붙습니다.
+* **초기 목록 (`app/conferences.yaml`)**
+  * 봇을 **처음 실행할 때 한 번만** 읽습니다. 그 뒤로는 DB가 기준이라 yaml을 고쳐도 반영되지 않습니다. Slack에서 고치세요.
+  * 날짜는 공식 사이트에서 확인한 것만 넣었고, 각 날짜 옆에 출처 URL을 주석으로 달았습니다. 아직 발표되지 않은 학회는 `TODO`로 비워 뒀습니다.
+  * 다른 서버로 옮길 때는 `/deadline conf export`로 받은 파일을 새 봇의 `app/conferences.yaml`(또는 `DEADLINE_SEED_FILE`)로 두고 빈 DB로 시작하면 됩니다.
+
 ## Slurm으로 가는 징검다리
 
 Slurm이 부담스러운 동안 `/gpu reserve`를 **약속 기반 예약 시스템**으로 써 보세요. 예약 현황이 채널에 공유되고, 예약된 GPU를 다른 사람이 쓰면 알림이 가기 때문에 "누가 몇 번 GPU를 쓰는지" 정리하는 습관이 먼저 잡힙니다. 사용자별 GPU 사용 시간과 유휴 점유 통계가 쌓이면 Slurm 도입이 왜 필요한지 설득하는 근거로도 쓸 수 있습니다.
@@ -258,6 +296,8 @@ app/
   gpureport.py   주간 GPU 리포트 (예약 vs 실제 사용), Google Sheet 기록
   meetings.py    /meeting, 회의록 → action items, 정기 미팅 알림, 금요일 주간 정리
   papers.py      /papers, arXiv·HF 수집, 선별·요약, 매일·주간 다이제스트
+  deadlines.py   /deadline, 학회 목록·마감·목표 학회, D-day 알림, 월요일 요약
+  conferences.yaml  학회 초기 목록 (첫 실행에만 읽음)
   llm.py         Claude API 래퍼 (도구 호출로 JSON 구조화 출력)
   home.py        App Home 탭
   timeparse.py   한국어 날짜·시간 파싱

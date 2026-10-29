@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import date, datetime, time, timedelta
 
-from . import todo
+from . import deadlines, todo
 from .ctx import Ctx, actions, button, confirm_dialog, context, divider, modal_value, section
 from .llm import LLMError
 from .timeparse import WEEKDAY_NAMES, fmt_due, parse_due, parse_hhmm, weekday_index
@@ -438,6 +438,9 @@ def weekly_blocks(ctx: Ctx, uid: str, _arg: str = "") -> tuple[str, list]:
     title = f"🗓 이번 주 정리 ({fmt_date(start)}~{fmt_date(min(end, start + timedelta(days=4)))})"
     b = [section(f"*{title}*\n미팅 {len(meetings)}회 · 완료한 action item {len(done)}개 · 남은 항목 {len(open_rows)}개"
                  + (f" (🔴 기한 지남 {overdue})" if overdue else ""))]
+    goal = deadlines.weekly_line(ctx, uid)
+    if goal:
+        b.append(context(goal))
     if meetings:
         b.append(context("이번 주 미팅: " + ", ".join(f"{fmt_date(date.fromisoformat(m['meeting_date']))} {m['title']}"
                                                       for m in meetings)))

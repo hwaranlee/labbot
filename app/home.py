@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from . import attendance as att
-from . import todo
+from . import deadlines, todo
 from .ctx import Ctx, actions, button, context, divider, header, section
 from .servers import Monitor
 
@@ -16,7 +16,7 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     b: list = [header("🧪 LabBot")]
     hol = ctx.holiday_name(today)
     b.append(context(f"{att.fmt_day(today)}" + (f" · {hol}" if hol else "")
-                     + " · 명령어: `/todo` `/in` `/pause` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/gpu` `/server`"))
+                     + " · 명령어: `/todo` `/in` `/pause` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/deadline` `/gpu` `/server`"))
 
     # 근태
     st = att.status_of(ctx, uid)
@@ -65,6 +65,14 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     b.append(section(f"*🗓 미팅 · 📚 논문*\n미팅 action items 남은 것 {mtg_open}개"))
     b.append(actions(button("📝 미팅 정리", "meeting_open", "0", style="primary"),
                      button("이번 주 정리", "weekly_open"), button("논문 주제", "papers_topics_open")))
+    b.append(divider())
+
+    # 목표 학회
+    lines = deadlines.home_lines(ctx, uid)
+    b.append(section("*🎯 내 목표 학회*\n" + ("\n".join(lines) or "아직 없어요. `/deadline target ICLR` 로 등록하면 D-day를 "
+                                                               "보여 드려요."), button("마감 일정", "deadline_upcoming_open")))
+    if lines:
+        b.append(context(deadlines.CHECK_NOTE))
     b.append(divider())
 
     # 서버

@@ -173,6 +173,57 @@ CREATE TABLE IF NOT EXISTS paper_threads (
     PRIMARY KEY (channel, ts, paper_id)
 );
 
+CREATE TABLE IF NOT EXISTS conferences (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    grp          TEXT DEFAULT '',        -- NLP / ML / Speech ... (자유 입력)
+    official_url TEXT DEFAULT '',
+    review_type  TEXT DEFAULT 'direct',  -- direct | arr | arr_cycle
+    default_tz   TEXT DEFAULT 'AoE',
+    watch        INTEGER DEFAULT 1,      -- 월요일 채널 요약에 포함
+    created_by   TEXT NOT NULL,          -- Slack ID 또는 'yaml'(초기 목록)
+    created_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conf_deadlines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    conf_id      INTEGER NOT NULL,
+    year         INTEGER NOT NULL,
+    kind         TEXT NOT NULL,          -- abstract | paper | supplementary | arr_cycle | commitment
+    due_at       INTEGER NOT NULL,
+    tz           TEXT NOT NULL,          -- 입력한 시간대 (비우면 학회 기본값으로 채움)
+    official_url TEXT DEFAULT '',
+    note         TEXT DEFAULT '',
+    updated_by   TEXT,
+    updated_at   INTEGER,
+    UNIQUE (conf_id, year, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_conf_deadlines_due ON conf_deadlines(due_at);
+
+CREATE TABLE IF NOT EXISTS arr_links (
+    cycle_id INTEGER NOT NULL,           -- review_type='arr_cycle' 학회
+    conf_id  INTEGER NOT NULL,           -- 그 주기 결과로 commit할 수 있는 학회
+    PRIMARY KEY (cycle_id, conf_id)
+);
+
+CREATE TABLE IF NOT EXISTS conf_targets (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    conf_id    INTEGER NOT NULL,
+    title      TEXT DEFAULT '',
+    created_at INTEGER NOT NULL,
+    UNIQUE (user_id, conf_id)
+);
+
+CREATE TABLE IF NOT EXISTS deadline_alerts (
+    user_id     TEXT NOT NULL,
+    deadline_id INTEGER NOT NULL,
+    stage       INTEGER NOT NULL,        -- D-n
+    due_at      INTEGER NOT NULL,        -- 보낼 때의 마감 (날짜가 바뀌면 다시 보냄)
+    sent_on     TEXT NOT NULL,
+    PRIMARY KEY (user_id, deadline_id, stage, due_at)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
