@@ -108,6 +108,8 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 3. 빈 스프레드시트를 만들고, **공유**에서 서비스 계정 이메일(`...@...iam.gserviceaccount.com`)을 **편집자**로 추가합니다.
 4. `.env`에 `GSHEET_ID`(URL의 `/d/<ID>/edit` 부분)와 `GOOGLE_SERVICE_ACCOUNT_FILE=/data/google-sa.json`(Docker 기준)을 넣고 재시작합니다.
 5. 관리자가 `/gpu week sheet`로 바로 기록해 보면 설정을 확인할 수 있습니다.
+   * `... Sheets API has not been used in project ... or it is disabled` → 서비스 계정이 속한 프로젝트에서 Google Sheets API를 켜고 몇 분 뒤 다시 시도하세요.
+   * `PermissionError`·`SpreadsheetNotFound`만 나오면 → 시트를 서비스 계정 이메일과 **편집자**로 공유했는지 확인하세요.
 
 탭은 자동으로 만들어집니다: `GPU 주간`(서버·GPU별), `사용자 주간`(리눅스 계정별), `예약 내역`(예약 1건당 1행, 예약 시간 동안의 사용률·메모리·사용 비율).
 
@@ -130,6 +132,62 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 * 정기 개인 미팅이 있으면 등록하세요. 예: `/meeting recurring @김철수 tue 14:00 60`
 * 학생마다 한 번씩 `/gpu link <linux-user>`를 입력해 달라고 안내하세요. 계정을 연결해야 GPU를 잡아 두고 쓰지 않을 때 **본인에게 DM**이 가고, 사용 통계에 이름이 표시됩니다.
 * 관리자는 `/gpu link kim @김철수`처럼 다른 사람의 계정도 대신 연결할 수 있습니다.
+
+## 5. 운영: 끄기 · 켜기 · 업데이트 · DB 초기화
+
+| 하려는 일 | Docker (방법 A, `labbot` 폴더에서) | systemd (방법 B) |
+|---|---|---|
+| 봇 끄기 | `docker compose down` | `sudo systemctl stop labbot` |
+| 봇 켜기 | `docker compose up -d` | `sudo systemctl start labbot` |
+| `.env`만 바꾼 뒤 반영 | `docker compose up -d` (`restart`는 `.env`를 다시 읽지 않음) | `sudo systemctl restart labbot` |
+| 코드 업데이트 후 반영 | `git pull && docker compose up -d --build` | `cd /opt/labbot && sudo -u labbot git pull && sudo -u labbot .venv/bin/pip install -r requirements.txt && sudo systemctl restart labbot` |
+| 로그 보기 | `docker compose logs -f` | `journalctl -u labbot -f` |
+
+* 켠 뒤 로그에 `LabBot 시작`이 보이고 `curl http://<NAS-IP>:8787/health`가 `{"ok": true, ...}`이면 정상입니다.
+* `manifest.yaml`이 바뀐 업데이트(새 슬래시 명령 등)는 Slack 앱 설정 → **App Manifest**에 붙여 넣고 저장한 뒤, 안내가 나오면 앱을 다시 설치해야 명령이 보입니다.
+* 에이전트(`agent/`)가 바뀐 업데이트는 각 서버에서 새 `agent/` 폴더로 `install-agent.sh`(또는 `install-agent-user.sh`)를 같은 인자로 다시 실행하세요.
+
+### DB 초기화 (모든 데이터 삭제)
+
+⚠️ Todo, 출퇴근·휴가, GPU 예약, `/gpu link` 연결, 논문 주제·연구실 소개, 목표 학회 등 **모든 기록이 사라집니다.** 먼저 백업해 두세요.
+
+```bash
+# Docker: 반드시 봇을 먼저 끄고 지웁니다
+docker compose down
+cp data/labbot.db data/labbot.db.bak-$(date +%Y%m%d)   # 백업 (선택)
+rm -f data/labbot.db data/labbot.db-wal data/labbot.db-shm
+docker compose up -d
+# systemd: sudo systemctl stop labbot → /opt/labbot/labbot.db* 삭제 → sudo systemctl start labbot
+```
+
+* **봇이 켜진 채로 지우면 안 됩니다.** 실행 중인 봇은 이미 열어 둔 파일에 계속 쓰기 때문에 재시작 전까지 예전 데이터가 그대로 보입니다.
+* `data/google-sa.json`(서비스 계정 키)은 지우지 마세요.
+* DB 위치는 `DB_PATH`로 정해집니다. Docker는 `/data/labbot.db`(= 호스트의 `data/labbot.db`)입니다. 봇이 여러 곳에서 돌고 있다면 **실제로 돌고 있는 서버**의 파일을 지워야 합니다.
+* 다시 켜면 빈 DB가 만들어지고 학회 목록은 `conferences.yaml`에서 다시 읽습니다. 학생들은 `/gpu link`, 관리자는 `/papers add`·`/papers profile`을 다시 해 주세요.
+
+### lb (학습 작업 알림) 설정과 테스트
+
+1. NAS의 `.env`에 `JOBS_TOKEN`을 넣습니다(`openssl rand -hex 24`, `METRICS_TOKEN`과 **다른 값**). 그다음 봇을 다시 켭니다(`docker compose up -d`). 로그에 `JOBS_TOKEN이 비어 있어…` 경고가 없으면 켜진 것입니다.
+2. Slack 앱에 최신 `manifest.yaml`을 반영해 `/jobs` 명령을 추가합니다.
+3. 각 GPU 서버에서 마지막 인자로 `JOBS_TOKEN`을 주고 에이전트를 다시 설치합니다. `lb`가 함께 설치됩니다.
+   ```bash
+   sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu1 /,/home,/data <JOBS_TOKEN>
+   # sudo 없이: bash ./install-agent-user.sh (같은 인자) → ~/.local/bin/lb
+   ```
+4. Slack에서 `/gpu link <리눅스계정>`으로 계정을 연결합니다.
+5. GPU 서버에서 테스트합니다.
+   ```bash
+   lb notify "lb 테스트"                          # 바로 DM이 오면 연결 성공
+   lb run --min 0 -- sleep 5                      # ✅ 성공 알림 (기본 --min 1m: 1분 미만 성공은 알리지 않음)
+   lb run -- python -c "import sys; sys.exit(3)"  # ❌ 실패 알림 (실패는 항상 알림)
+   lb run --min 0 -- python -c "import torch, time; x = torch.ones(1, device='cuda'); time.sleep(90)"  # GPU 사용량 집계
+   ```
+   마지막 명령이 도는 동안 Slack에서 `/jobs`, `/jobs all`을 입력하면 실행 중인 작업이 보여야 합니다.
+
+**DM이 안 올 때**
+* `lb`가 출력하는 경고를 먼저 보세요. `401`이면 봇 `.env`에 `JOBS_TOKEN`이 없거나, 서버의 `/etc/labbot-lb.conf`(또는 `~/.config/labbot-lb.conf`)에 적힌 값과 다른 것입니다.
+* 연결 자체가 안 되면 GPU 서버에서 `curl http://<NAS-IP>:8787/health`로 방화벽(8787 포트)을 확인하세요.
+* `lb` 시작 시 계정 연결 경고가 나오면 `/gpu link`를 안 한 것입니다.
 
 ---
 
