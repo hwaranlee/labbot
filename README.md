@@ -95,6 +95,15 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 
 * **sudo 권한이 없는 서버**에서는 같은 인자로 `bash ./install-agent-user.sh ...`를 쓰세요. 내 계정의 systemd 사용자 서비스(안 되면 crontab)로 등록하고, root 없이도 모든 사용자의 GPU 프로세스를 볼 수 있습니다.
 * 네 번째 인자는 감시할 디스크 경로이고, 서버마다 실제 마운트 경로로 바꿔 주세요 (`df -h`로 확인).
+* 다섯 번째 인자 `JOBS_TOKEN`은 **선택**입니다. 봇 `.env`의 `JOBS_TOKEN`과 **같은 값**을 넣어야 하고, 학습 작업 알림(`lb`)을 쓸 GPU 서버에만 넣으면 됩니다.
+
+  | | `JOBS_TOKEN` 넣음 | 안 넣음 |
+  |---|---|---|
+  | 에이전트 (`/gpu`, `/server`) | ✅ | ✅ (`METRICS_TOKEN`만 사용) |
+  | `install-agent.sh` (sudo) | `/usr/local/bin/lb` + `/etc/labbot-lb.conf` 생성 | `lb` 파일만 설치, 설정 파일 없음 → 실행해도 알림이 가지 않음 |
+  | `install-agent-user.sh` (sudo 없음) | `~/.local/bin/lb` + `~/.config/labbot-lb.conf` 생성 | `lb`를 설치하지 않음 |
+
+  NAS처럼 모니터링만 할 서버는 빼도 됩니다. 나중에 `lb`가 필요해지면 같은 명령에 다섯 번째 인자를 붙여 다시 실행하세요.
 * 설치가 끝나면 수집 결과가 한 번 출력됩니다. 1~2분 뒤 Slack에서 `/gpu`를 입력해 확인하세요.
 * GPU 프로세스의 사용자가 `?`로 보이면 `/etc/systemd/system/labbot-agent.service`에서 `User=nobody` 줄을 지우고 `sudo systemctl daemon-reload && sudo systemctl restart labbot-agent`를 실행하세요.
 * Docker 컨테이너 안에서 돌리는 작업은 컨테이너를 실행한 계정(대개 `root`)으로 표시됩니다.
