@@ -156,6 +156,23 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 * `manifest.yaml`이 바뀐 업데이트(새 슬래시 명령 등)는 Slack 앱 설정 → **App Manifest**에 붙여 넣고 저장한 뒤, 안내가 나오면 앱을 다시 설치해야 명령이 보입니다.
 * 에이전트(`agent/`)가 바뀐 업데이트는 각 서버에서 새 `agent/` 폴더로 `install-agent.sh`(또는 `install-agent-user.sh`)를 같은 인자로 다시 실행하세요.
 
+### 업데이트 배포 체크리스트
+
+새 버전을 받아 배포할 때 이 순서로 진행하세요. 해당 없는 단계는 건너뛰면 됩니다.
+
+- [ ] **Google Cloud (Sheet를 쓰는 경우)**: 서비스 계정 프로젝트에서 Google Sheets API가 켜져 있고, GPU 시트·출퇴근 시트 모두 서비스 계정 이메일에 **편집자**로 공유돼 있는지 확인
+- [ ] **NAS `.env`**: `.env.example`과 비교해 새로 생긴 값 채우기 (예: `JOBS_TOKEN` = `openssl rand -hex 24`, `METRICS_TOKEN`과 다른 값 · `DISK_ALERT_PCT=95`)
+- [ ] **NAS 재배포**: `git pull && docker compose up -d --build` → `docker compose logs -f`에 `LabBot 시작`이 보이고 경고가 없는지 확인
+  - DB를 초기화하려면 [DB 초기화](#db-초기화-모든-데이터-삭제) 순서대로 (봇을 먼저 끈 뒤 삭제)
+- [ ] **Slack manifest**: `manifest.yaml`이 바뀌었으면 App Manifest에 붙여 넣고 저장, 안내가 나오면 앱 재설치
+- [ ] **GPU 서버마다 에이전트 재설치**: 새 `agent/` 폴더로 `install-agent.sh`(또는 `install-agent-user.sh`)를 같은 인자 + 다섯 번째 인자 `JOBS_TOKEN`으로 다시 실행 (`lb`도 함께 설치·갱신됨). 모니터링만 하는 NAS 에이전트는 `agent/`가 바뀐 경우에만
+- [ ] **Slack에서 확인**
+  - `/gpu`, `/server`에 모든 서버가 보이는지
+  - `/gpu week sheet`, `/attendance sheet`로 시트 기록 (관리자)
+  - `/papers`가 목록을 보여 주는지
+  - DB를 초기화했다면: 학생들 `/gpu link <리눅스계정>`, 관리자 `/papers add`·`/papers profile` 다시
+- [ ] **lb 테스트** (GPU 서버에서): `lb notify "lb 테스트"` → `lb run --min 0 -- sleep 5` → `lb run -- python -c "import sys; sys.exit(3)"` 로 DM 3개, 실행 중 `/jobs`에 보이는지 ([lb 설정과 테스트](#lb-학습-작업-알림-설정과-테스트) 참고)
+
 ### DB 초기화 (모든 데이터 삭제)
 
 ⚠️ Todo, 출퇴근·휴가, GPU 예약, `/gpu link` 연결, 논문 주제·연구실 소개, 목표 학회 등 **모든 기록이 사라집니다.** 먼저 백업해 두세요.
