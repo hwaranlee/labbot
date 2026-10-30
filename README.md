@@ -262,6 +262,7 @@ lb notify "eval 끝남: BLEU 31.2"     # 스크립트 안에서 한 줄 알림
 | `/papers add video diffusion, 3D generation cat:cs.CV` | 연구실 주제 추가 (쉼표는 '또는', `cat:`는 arXiv 분야 제한) |
 | `/papers add-mine neural rendering` | 개인 주제 추가 (결과가 DM으로 옵니다) |
 | `/papers profile <연구실 소개>` | Claude가 관련도를 판단할 기준 (관리자) |
+| `/papers profile clear` | 연구실 소개 삭제 (관리자) |
 | `/papers list` · `/papers delete 3` | 주제 보기·삭제 |
 | `/papers search test-time scaling` | 최근 2주 논문을 바로 찾아 요약 |
 | `/papers summary 2609.12345` | LabBot이 소개한 논문(다이제스트·검색 결과)을 문제·방법·결과·한계로 자세히 요약. 그 밖의 논문은 요약하지 않습니다 |

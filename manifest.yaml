@@ -50,7 +50,7 @@ features:
       should_escape: true
     - command: /papers
       description: 논문 구독 주제·검색·요약
-      usage_hint: "[add keywords cat:cs.CV|add-mine|list|delete 3|profile|search keywords|summary 2609.12345|now]"
+      usage_hint: "[add keywords cat:cs.CV|add-mine|list|delete 3|profile|profile clear|search keywords|summary 2609.12345|now]"
       should_escape: false
     - command: /deadline
       description: 학회 마감 D-day · 목표 학회 알림 · 학회 목록 관리

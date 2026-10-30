@@ -29,7 +29,7 @@ HELP = """*📚 /papers 사용법*
 • `/papers add diffusion model, video generation cat:cs.CV` — 연구실 주제 추가 (쉼표 = 또는, `cat:` 은 arXiv 분야 제한)
 • `/papers add-mine neural radiance field` — 나만 받는 개인 주제 (DM으로 와요)
 • `/papers list` 주제 보기·삭제 · `/papers delete 3`
-• `/papers profile &lt;연구실 소개 몇 문장&gt;` 관련도 판단 기준 설정 (관리자)
+• `/papers profile &lt;연구실 소개 몇 문장&gt;` 관련도 판단 기준 설정 · `/papers profile clear` 삭제 (관리자)
 • `/papers search test-time scaling` — 최근 2주 논문 바로 찾아 요약
 • `/papers summary 2609.12345` — LabBot이 소개한 논문 자세히 요약
 • `/papers now` — 다이제스트 바로 실행 (관리자)
@@ -417,6 +417,9 @@ def register(app, ctx: Ctx) -> None:
                 return respond(f"연구실 소개: {lab_profile(ctx) or '미설정'}")
             if ctx.cfg.admin_ids and not ctx.is_admin(uid):
                 return respond("연구실 소개는 관리자만 바꿀 수 있어요.")
+            if rest.lower() in ("clear", "delete", "reset", "삭제"):
+                ctx.db.run("DELETE FROM settings WHERE key='lab_profile'")
+                return respond("🗑 연구실 소개를 삭제했어요. 이제 관심 주제만으로 관련도를 판단해요.")
             ctx.db.set_setting("lab_profile", rest)
             return respond("✅ 연구실 소개를 저장했어요. 논문 관련도 판단에 사용해요.")
         if sub in ("search", "검색"):
