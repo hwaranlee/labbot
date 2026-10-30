@@ -344,6 +344,7 @@ app/
   home.py        App Home 탭
   timeparse.py   한국어 날짜·시간 파싱
 agent/           각 서버에 설치하는 수집기와 lb CLI (표준 라이브러리만 사용)
+docs/BACKLOG.md  다음에 만들 기능 후보
 ```
 
 데이터는 SQLite 파일(`labbot.db`) 하나에 저장됩니다. 이 파일만 백업하면 됩니다.
