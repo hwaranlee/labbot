@@ -60,7 +60,7 @@ class Config:
     jobs_token: str = ""                 # lb CLI 전용 (POST /jobs만 가능). 비우면 작업 알림 끔
     jobs_low_util: int = 10              # 작업 평균 GPU 사용률이 이보다 낮으면 '거의 안 씀' 안내
     server_summary: time = time(9, 0)
-    disk_alert_pct: int = 90
+    disk_alert_pct: int = 95
     offline_minutes: int = 5
     idle_gpu_minutes: int = 60
     idle_gpu_util: int = 5
@@ -143,7 +143,7 @@ def load_config() -> Config:
         jobs_token=os.environ.get("JOBS_TOKEN", ""),
         jobs_low_util=_int("JOBS_LOW_UTIL", 10),
         server_summary=_time("SERVER_SUMMARY", "09:00"),
-        disk_alert_pct=_int("DISK_ALERT_PCT", 90),
+        disk_alert_pct=_int("DISK_ALERT_PCT", 95),
         offline_minutes=_int("OFFLINE_MINUTES", 5),
         idle_gpu_minutes=_int("IDLE_GPU_MINUTES", 60),
         idle_gpu_util=_int("IDLE_GPU_UTIL", 5),
