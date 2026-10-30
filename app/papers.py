@@ -375,9 +375,10 @@ def topics_blocks(ctx: Ctx, uid: str) -> list:
         rows = topics_for(ctx, owner)
         b.append(section(f"*{label} 주제* ({len(rows)})"))
         for t in rows:
-            txt = f"`#{t['id']}` {t['query']}" + (f" · `cat:{t['categories']}`" if t["categories"] else "")
+            q = t["query"] if len(t["query"]) <= 200 else t["query"][:200] + "…"
+            txt = f"`#{t['id']}` {q}" + (f" · `cat:{t['categories']}`" if t["categories"] else "")
             b.append(section(txt, button("삭제", "paper_topic_delete", str(t["id"]),
-                                         confirm=confirm_dialog("주제 삭제", f"'{t['query']}' 주제를 삭제할까요?"))))
+                                         confirm=confirm_dialog("주제 삭제", f"'{q[:200]}' 주제를 삭제할까요?"))))
         if not rows:
             b.append(context("없음 · `/papers " + ("add" if owner == "lab" else "add-mine") + " 키워드` 로 추가"))
     prof = lab_profile(ctx)
@@ -400,6 +401,8 @@ def register(app, ctx: Ctx) -> None:
             q, cats = split_topic(rest)
             if not q:
                 return respond("키워드를 적어 주세요. 예: `/papers add diffusion model cat:cs.CV`")
+            if len(q) > 300 or len(phrases(q)) > 10:
+                return respond("주제가 너무 길어요. 키워드는 쉼표로 10개, 300자 이내로 나눠서 여러 번 추가해 주세요.")
             tid = ctx.db.run("INSERT INTO paper_topics(owner, query, categories, created_by, created_at) VALUES (?,?,?,?,?)",
                              (owner, q, cats or None, uid, int(_time.time())))
             where = "연구실" if owner == "lab" else "내 개인"

@@ -162,8 +162,8 @@ def divider() -> dict:
 
 
 def confirm_dialog(title: str, text: str, ok: str = "확인", deny: str = "취소") -> dict:
-    return {"title": {"type": "plain_text", "text": title},
-            "text": {"type": "mrkdwn", "text": text},
+    return {"title": {"type": "plain_text", "text": title[:100]},
+            "text": {"type": "mrkdwn", "text": text[:300]},
             "confirm": {"type": "plain_text", "text": ok},
             "deny": {"type": "plain_text", "text": deny}}
 
