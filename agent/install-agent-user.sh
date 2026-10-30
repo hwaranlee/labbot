@@ -43,7 +43,23 @@ LABBOT_JOBS_URL=${URL%/metrics}/jobs
 LABBOT_JOBS_TOKEN=$JOBS_TOKEN
 LABBOT_HOST=$NAME
 EOF
-    echo "lb 설치: ~/.local/bin/lb (PATH에 ~/.local/bin 이 없으면 추가해 주세요)"
+    echo "lb 설치: ~/.local/bin/lb (설정 ~/.config/labbot-lb.conf)"
+    # ~/.local/bin 이 PATH에 없으면 셸 설정에 추가 (Ubuntu는 로그인 시 폴더가 있어야만 PATH에 넣어 줌)
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *)
+            line='export PATH="$HOME/.local/bin:$PATH"  # labbot lb'
+            for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+                if [[ -f "$rc" ]] && ! grep -qF "# labbot lb" "$rc"; then
+                    echo "$line" >> "$rc"
+                    echo "PATH에 ~/.local/bin 추가: $rc"
+                fi
+            done
+            echo "⚠️ 지금 셸에서 바로 쓰려면: export PATH=\"\$HOME/.local/bin:\$PATH\"  (또는 다시 로그인)"
+            ;;
+    esac
+elif [[ ! -f "$HOME/.local/bin/lb" ]]; then
+    echo "ℹ️ JOBS_TOKEN을 주지 않아 lb(학습 작업 알림)는 설치하지 않았어요 (다섯 번째 인자)."
 fi
 
 echo "── 수집 테스트 ──"
