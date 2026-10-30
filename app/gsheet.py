@@ -13,6 +13,15 @@ def open_sheet(ctx: Ctx, sheet_id: str):
     return gspread.service_account(filename=ctx.cfg.google_sa_file).open_by_key(sheet_id)
 
 
+def error_text(e: Exception) -> str:
+    """gspread는 403/404를 메시지 없는 PermissionError 등으로 바꿔 던지므로, 원래 API 오류까지 보여 줍니다."""
+    msgs = []
+    while e is not None and len(msgs) < 3:
+        msgs.append(f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
+        e = e.__cause__ or e.__context__
+    return " ← ".join(msgs)[:1000]
+
+
 def replace_tab(sh, title: str, header: list, rows: list[list]) -> None:
     """탭 내용을 header + rows로 바꿉니다 (없으면 만듦). 남는 예전 행은 지워집니다."""
     values = [header] + rows

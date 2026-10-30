@@ -673,7 +673,7 @@ def register(app, ctx: Ctx) -> None:
                 msg = sync_sheet(ctx)
             except Exception as e:  # noqa: BLE001
                 log.exception("Google Sheet 동기화 실패")
-                return respond(f"Google Sheet 동기화에 실패했어요: {e}")
+                return respond(f"Google Sheet 동기화에 실패했어요: {gsheet.error_text(e)}")
             url = gsheet.url(ctx.cfg.attendance_gsheet_id)
             return respond(msg + (f" <{url}|시트 열기>" if url and msg.startswith("📄") else ""))
         return respond(HELP)

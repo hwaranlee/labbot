@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import gpureport
+from . import gpureport, gsheet
 from .ctx import Ctx, context, divider, section
 from .timeparse import WEEKDAY_NAMES, fmt_duration, parse_duration
 
@@ -549,7 +549,7 @@ def register(app, ctx: Ctx, mon: Monitor) -> None:
                     return respond(gpureport.write_sheet(ctx, rep, force="force" in rest))
                 except Exception as e:  # noqa: BLE001
                     log.exception("Google Sheet 기록 실패")
-                    return respond(f"Google Sheet 기록에 실패했어요: {e}")
+                    return respond(f"Google Sheet 기록에 실패했어요: {gsheet.error_text(e)}")
             return respond(text="주간 GPU 리포트", blocks=rep.blocks(gpureport.sheet_url(ctx)))
         respond(HELP)
 
