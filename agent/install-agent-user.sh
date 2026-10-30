@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # LabBot 에이전트 설치 (sudo 없이, 내 계정으로 실행)
-# 사용법: bash ./install-agent-user.sh <봇주소> <토큰> [서버이름] [디스크경로들]
-#   예) bash ./install-agent-user.sh http://100.x.y.z:8787/metrics abc123 gpu1 /,/home,/data
+# 사용법: bash ./install-agent-user.sh <봇주소> <토큰> [서버이름] [디스크경로들] [JOBS_TOKEN]
+#   예) bash ./install-agent-user.sh http://100.x.y.z:8787/metrics abc123 gpu1 /,/home,/data def456
+# JOBS_TOKEN을 주면 학습 작업 알림 CLI(lb)를 ~/.local/bin/lb 로 설치합니다 (내 계정에서만 사용).
 # systemd 사용자 서비스로 등록하고, 로그아웃해도 계속 돌도록 linger를 켭니다.
 # 그게 안 되는 서버에서는 crontab(@reboot)으로 대신 등록합니다.
 set -euo pipefail
 
-if [[ $# -lt 2 ]]; then sed -n '2,6p' "$0"; exit 1; fi
+if [[ $# -lt 2 ]]; then sed -n '2,7p' "$0"; exit 1; fi
 
-URL="$1"; TOKEN="$2"; NAME="${3:-$(hostname -s)}"; DISKS="${4:-/}"
+URL="$1"; TOKEN="$2"; NAME="${3:-$(hostname -s)}"; DISKS="${4:-/}"; JOBS_TOKEN="${5:-}"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DIR="$HOME/.labbot-agent"
 
@@ -33,6 +34,17 @@ set -a; . "$HOME/.labbot-agent/agent.env"; set +a
 exec nice -n 10 python3 "$HOME/.labbot-agent/labbot_agent.py"
 EOF
 chmod 700 "$DIR/run.sh"
+
+if [[ -n "$JOBS_TOKEN" ]]; then
+    mkdir -p "$HOME/.local/bin" "$HOME/.config"
+    install -m 755 "$SRC/lb" "$HOME/.local/bin/lb"
+    cat > "$HOME/.config/labbot-lb.conf" <<EOF
+LABBOT_JOBS_URL=${URL%/metrics}/jobs
+LABBOT_JOBS_TOKEN=$JOBS_TOKEN
+LABBOT_HOST=$NAME
+EOF
+    echo "lb 설치: ~/.local/bin/lb (PATH에 ~/.local/bin 이 없으면 추가해 주세요)"
+fi
 
 echo "── 수집 테스트 ──"
 set -a; . "$DIR/agent.env"; set +a

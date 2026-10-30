@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 
 def read_cpu_times():
@@ -104,6 +104,21 @@ def proc_info(pids):
     return out
 
 
+def ancestors(pid, limit=30):
+    """부모 pid 목록 (가까운 순). lb로 실행한 작업의 자식 프로세스(torchrun worker 등)를 찾는 데 씁니다."""
+    out = []
+    while len(out) < limit:
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (IOError, OSError, ValueError, IndexError):
+            break
+        if pid <= 1:
+            break
+        out.append(pid)
+    return out
+
+
 def gpus():
     if not shutil.which("nvidia-smi"):
         return []
@@ -134,7 +149,7 @@ def gpus():
             continue
         i = info.get(pid, {})
         g["procs"].append({"pid": pid, "user": i.get("user", "?"), "mem_mb": mem,
-                           "elapsed": i.get("elapsed"), "cmd": i.get("cmd", "")})
+                           "elapsed": i.get("elapsed"), "cmd": i.get("cmd", ""), "ppids": ancestors(pid)})
     return result
 
 

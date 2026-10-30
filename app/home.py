@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from . import attendance as att
-from . import deadlines, todo
+from . import deadlines, jobs, todo
 from .ctx import Ctx, actions, button, context, divider, header, section
 from .servers import Monitor
 
@@ -16,7 +16,7 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     b: list = [header("🧪 LabBot")]
     hol = ctx.holiday_name(today)
     b.append(context(f"{att.fmt_day(today)}" + (f" · {hol}" if hol else "")
-                     + " · 명령어: `/todo` `/in` `/pause` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/deadline` `/gpu` `/server`"))
+                     + " · 명령어: `/todo` `/in` `/pause` `/out` `/vacation` `/attendance` `/meeting` `/papers` `/deadline` `/gpu` `/jobs` `/server`"))
 
     # 근태
     st = att.status_of(ctx, uid)
@@ -96,6 +96,9 @@ def home_view(ctx: Ctx, mon: Monitor, uid: str) -> dict:
     txt = f"*🖥 서버* · 🟢 사용 가능한 GPU {free}/{total}\n" + ("\n".join(lines) or "아직 받은 데이터가 없어요.")
     if mine:
         txt += "\n" + mine
+    n_jobs = jobs.my_running_count(ctx, mon, uid)
+    if n_jobs:
+        txt += f"\n🏃 내 실행 중인 작업 {n_jobs}개 · `/jobs`"
     b.append(section(txt, button("GPU 현황", "gpu_status_open")))
     return {"type": "home", "blocks": b[:100]}
 

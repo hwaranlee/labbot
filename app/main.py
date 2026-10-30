@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from . import attendance, deadlines, gpureport, home, meetings, papers, servers, todo
+from . import attendance, deadlines, gpureport, home, jobs, meetings, papers, servers, todo
 from .config import Config, load_config
 from .ctx import Ctx
 from .db import DB
@@ -35,6 +35,7 @@ def create_app(cfg: Config, verify_token: bool = True, client=None, sync: bool =
     meetings.register(app, ctx)
     papers.register(app, ctx)
     deadlines.register(app, ctx)
+    jobs.register(app, ctx, mon)
     home.register(app, ctx, mon)
     return app, ctx, mon
 
@@ -77,6 +78,9 @@ def start_scheduler(ctx: Ctx, mon: servers.Monitor) -> BackgroundScheduler:
                   misfire_grace_time=3600)
     sched.add_job(safe(lambda: deadlines.weekly_job(ctx)), at(c.deadline_weekly, c.deadline_weekly_day),
                   id="deadline_weekly", misfire_grace_time=3600)
+    if mon.jobs:
+        sched.add_job(safe(mon.jobs.watch_job), "interval", minutes=1, id="jobs_watch")
+        sched.add_job(safe(mon.jobs.prune_job), CronTrigger(hour=4, minute=10, timezone=ctx.tz), id="jobs_prune")
     sched.add_job(safe(mon.prune_job), CronTrigger(hour=4, minute=0, timezone=ctx.tz), id="prune")
     sched.start()
     return sched
@@ -93,6 +97,10 @@ def main() -> None:
         log.warning("ATTENDANCE_CHANNEL이 비어 있어 미출근 리마인더와 팀 현황이 동작하지 않아요.")
     if not cfg.anthropic_api_key:
         log.warning("ANTHROPIC_API_KEY가 없어 미팅 정리·논문 요약이 규칙 기반으로 동작해요.")
+    if not cfg.jobs_token:
+        log.warning("JOBS_TOKEN이 비어 있어 lb 작업 알림(POST /jobs)이 꺼져 있어요.")
+    elif cfg.jobs_token == cfg.metrics_token:
+        sys.exit("JOBS_TOKEN은 METRICS_TOKEN과 다른 값이어야 해요 (lb 설정 파일은 모든 사용자가 읽을 수 있어요).")
     if not cfg.leave_approver_ids:
         log.warning("LEAVE_APPROVER_IDS/ADMIN_IDS가 비어 있어 휴가가 자동 승인돼요.")
     app, ctx, mon = create_app(cfg)

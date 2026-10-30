@@ -224,6 +224,29 @@ CREATE TABLE IF NOT EXISTS deadline_alerts (
     PRIMARY KEY (user_id, deadline_id, stage, due_at)
 );
 
+CREATE TABLE IF NOT EXISTS jobs (
+    id            TEXT PRIMARY KEY,      -- lb가 만든 uuid
+    host          TEXT NOT NULL,
+    linux_user    TEXT NOT NULL,
+    slack_id      TEXT,                  -- user_links로 찾은 주인 (연결 전이면 NULL)
+    name          TEXT NOT NULL,
+    cmd           TEXT,                  -- lb에서 비밀값을 가린 명령
+    pid           INTEGER,
+    extra_pids    TEXT,                  -- JSON 배열: 함께 매칭할 pid (docker 컨테이너의 메인 프로세스 등)
+    mode          TEXT DEFAULT 'run',    -- run | watch
+    started_at    INTEGER NOT NULL,
+    ended_at      INTEGER,
+    exit_code     INTEGER,
+    signal        INTEGER,
+    status        TEXT DEFAULT 'running', -- running | ok | failed | ended(watch) | cancelled
+    tail          TEXT,                  -- JSON 배열, 로그 마지막 50줄 (lb에서 마스킹)
+    gpu_stats     TEXT,                  -- JSON: gpus, max_mem_mb, max_gpu_mem_mb, avg_util, samples
+    last_event_at INTEGER,
+    offline_alerted INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, host);
+CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(slack_id, ended_at);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -234,6 +257,7 @@ CREATE TABLE IF NOT EXISTS settings (
 MIGRATIONS = [
     ("tasks", "meeting_id", "INTEGER"),
     ("gpu_reservations", "released_at", "INTEGER"),   # 실제 해제 시각 (주간 리포트용)
+    ("jobs", "extra_pids", "TEXT"),
 ]
 
 # 기존 데이터를 고치는 마이그레이션 (여러 번 실행해도 결과가 같아야 함)

@@ -58,6 +58,7 @@
 cd labbot
 cp .env.example .env      # 토큰·채널·사람 ID 입력
 openssl rand -hex 24      # 이 값을 METRICS_TOKEN에 넣기
+openssl rand -hex 24      # 한 번 더 만들어서 JOBS_TOKEN에 넣기 (학습 작업 알림용, 다른 값이어야 함)
 docker compose up -d --build
 docker compose logs -f    # "LabBot 시작"이 보이면 성공
 ```
@@ -84,10 +85,10 @@ journalctl -u labbot -f
 `agent/` 폴더를 각 서버에 복사한 뒤 실행합니다.
 
 ```bash
-# GPU 서버 1
-sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu1 /,/home,/data
+# GPU 서버 1 (마지막 인자 JOBS_TOKEN을 주면 학습 작업 알림 CLI `lb`도 설치)
+sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu1 /,/home,/data <JOBS_TOKEN>
 # GPU 서버 2
-sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu2 /,/home,/data
+sudo ./install-agent.sh http://<NAS-IP>:8787/metrics <METRICS_TOKEN> gpu2 /,/home,/data <JOBS_TOKEN>
 # NAS (봇과 같은 서버여도 따로 설치. 주소는 127.0.0.1로)
 sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volume1
 ```
@@ -197,6 +198,45 @@ sudo ./install-agent.sh http://127.0.0.1:8787/metrics <METRICS_TOKEN> nas /volum
 
 모든 기준값은 `.env`에서 바꿀 수 있습니다.
 
+### 🏃 학습 작업 종료 알림 (`lb`)
+
+**학습 명령 앞에 `lb run --` 만 붙이면 끝.** 작업이 끝나면 Slack DM이 옵니다.
+
+```bash
+lb run -- python train.py --lr 1e-4
+lb run --name exp1-lr1e-4 --every 6h -- torchrun --nproc_per_node=4 train.py   # 이름 지정, 6시간마다 중간 보고
+nohup lb run -- python train.py > train.log 2>&1 &                              # nohup·tmux·스크립트 안에서도 그대로
+lb run -- docker run --gpus all -v $PWD:/w img python /w/train.py   # 컨테이너도 그대로
+lb run -- docker run -d --gpus all img python train.py              # -d면 바로 돌아오고, 컨테이너가 끝날 때 알림
+lb docker exp1                      # 이미 떠 있는 컨테이너 감시 (종료 코드·로그·GPU 사용량까지)
+lb watch 12345 --log train.log      # lb 없이 이미 돌리고 있는 작업 감시 (종료 코드는 알 수 없어 "끝남"으로 표시)
+lb notify "eval 끝남: BLEU 31.2"     # 스크립트 안에서 한 줄 알림
+```
+
+* 출력은 터미널에 그대로 보이고(진행 막대·색 포함), **종료 코드도 그대로** 돌려줍니다. `Ctrl+C`·`SIGTERM`은 학습 프로세스에 전달됩니다.
+* `--min 1m`(기본): 이보다 짧게 끝난 **성공** 작업은 알리지 않습니다. **실패는 항상** 알립니다.
+* 끝나면 DM에 ✅/❌, 서버, 걸린 시간, 종료 코드(시그널 이름), **로그 마지막 20줄**, 사용한 GPU 번호·최대 메모리·평균 사용률이 담깁니다.
+  * 흔한 실패는 첫 줄에 원인을 적습니다: CUDA out of memory, exit 137/Killed(OOM killer), loss NaN·inf, No space left on device, ModuleNotFoundError
+  * 평균 GPU 사용률이 `JOBS_LOW_UTIL`(10%)보다 낮으면 "데이터 로딩 병목일 수 있어요"라고 알려 줍니다.
+  * GPU 사용량은 에이전트가 보내는 프로세스 정보에서 **작업의 pid와 그 자식 프로세스**(torchrun worker 등)를 찾아 집계합니다. Docker 컨테이너는 `lb`의 자식 프로세스가 아니라서, `lb`가 `docker run`에 `--cidfile`을 끼워 넣어 컨테이너 ID를 알아낸 뒤 컨테이너 메인 프로세스의 pid를 봇에 따로 알립니다. `docker exec`로 나중에 띄운 프로세스는 메인 프로세스의 자식이 아니라 집계되지 않고, 컨테이너 **안에서** `lb`를 실행하면 pid가 달라 집계되지 않습니다.
+  * `docker run -d`는 바로 끝나므로, `lb`가 컨테이너를 기다리는 `lb docker`를 백그라운드로 띄워 두고 돌아옵니다. 종료 코드는 `docker wait`, 로그는 `docker logs`에서 가져옵니다. `--rm` 컨테이너가 감시 시작 전에 이미 지워졌다면 종료 코드는 "알 수 없음"이 됩니다.
+  * `lb docker`를 Ctrl+C로 멈추면 감시만 멈추고 컨테이너는 계속 돕니다. `lb run -- docker run`(포그라운드)의 Ctrl+C는 평소처럼 `docker run`에 전달됩니다.
+* 로그와 명령에 섞인 비밀값(`sk-…`, `hf_…`, wandb·AWS 키, `token=`, `password=` 등)은 **서버에서 보내기 전에** `***`로 가립니다.
+* 작업이 도는 서버가 응답 없음 상태가 되면 작업 주인에게 "gpu1 응답이 끊겼어요" DM이 갑니다 (작업당 한 번).
+* 봇이 꺼져 있거나 연결이 안 되면 3번 재시도한 뒤 경고만 출력하고, 작업은 그대로 진행합니다.
+* 처음 쓰기 전에 Slack에서 `/gpu link <리눅스계정>`을 해 주세요. 연결이 안 돼 있으면 `lb`가 시작할 때 경고합니다.
+
+| 명령 | 설명 |
+|---|---|
+| `/jobs` | 내 실행 중인 작업과 최근 10개 결과 |
+| `/jobs all` | 연구실 전체 실행 중인 작업 (이름, 서버, GPU, 경과 시간만. 로그는 보여 주지 않음) |
+
+**설치와 인증**
+* `install-agent.sh`의 다섯 번째 인자로 `JOBS_TOKEN`을 주면 `/usr/local/bin/lb`와 `/etc/labbot-lb.conf`(0644, 봇 주소·`JOBS_TOKEN`·서버 이름)를 만듭니다. sudo 없이 설치하면 `~/.local/bin/lb`, `~/.config/labbot-lb.conf`로 내 계정에만 설치됩니다.
+* `JOBS_TOKEN`은 모든 사용자가 읽을 수 있어서 **`POST /jobs`에만** 쓸 수 있습니다. 지표(`/metrics`)는 root만 읽는 `METRICS_TOKEN`으로만 받습니다. 두 값이 같으면 봇이 시작하지 않습니다.
+* ⚠️ **연구실 내부용이라 사용자 위조는 막지 않습니다.** 서버에 로그인한 사람은 다른 사람 이름으로 작업 알림을 보낼 수 있습니다 (예: `USER=kim lb notify ...`). 알림 내용을 근거로 무언가를 승인하거나 처리하지 마세요.
+* 기존 서버는 새 `agent/` 폴더로 `install-agent.sh`를 다시 실행하면 됩니다. 에이전트도 함께 갱신해야 자식 프로세스의 GPU 사용량이 집계됩니다 (예전 에이전트는 `lb`가 직접 띄운 프로세스만 찾음).
+
 ---
 
 ### 🗓 미팅 action items
@@ -297,11 +337,12 @@ app/
   meetings.py    /meeting, 회의록 → action items, 정기 미팅 알림, 금요일 주간 정리
   papers.py      /papers, arXiv·HF 수집, 선별·요약, 매일·주간 다이제스트
   deadlines.py   /deadline, 학회 목록·마감·목표 학회, D-day 알림, 월요일 요약
+  jobs.py        /jobs, lb 작업 이벤트(POST /jobs) 처리, 종료 DM, 실패 원인 힌트, 작업별 GPU 집계
   conferences.yaml  학회 초기 목록 (첫 실행에만 읽음)
   llm.py         Claude API 래퍼 (도구 호출로 JSON 구조화 출력)
   home.py        App Home 탭
   timeparse.py   한국어 날짜·시간 파싱
-agent/           각 서버에 설치하는 수집기 (표준 라이브러리만 사용)
+agent/           각 서버에 설치하는 수집기와 lb CLI (표준 라이브러리만 사용)
 ```
 
 데이터는 SQLite 파일(`labbot.db`) 하나에 저장됩니다. 이 파일만 백업하면 됩니다.

@@ -57,6 +57,8 @@ class Config:
     metrics_host: str = "0.0.0.0"
     metrics_port: int = 8787
     metrics_token: str = ""
+    jobs_token: str = ""                 # lb CLI 전용 (POST /jobs만 가능). 비우면 작업 알림 끔
+    jobs_low_util: int = 10              # 작업 평균 GPU 사용률이 이보다 낮으면 '거의 안 씀' 안내
     server_summary: time = time(9, 0)
     disk_alert_pct: int = 90
     offline_minutes: int = 5
@@ -138,6 +140,8 @@ def load_config() -> Config:
         metrics_host=os.environ.get("METRICS_HOST", "0.0.0.0"),
         metrics_port=_int("METRICS_PORT", 8787),
         metrics_token=os.environ.get("METRICS_TOKEN", ""),
+        jobs_token=os.environ.get("JOBS_TOKEN", ""),
+        jobs_low_util=_int("JOBS_LOW_UTIL", 10),
         server_summary=_time("SERVER_SUMMARY", "09:00"),
         disk_alert_pct=_int("DISK_ALERT_PCT", 90),
         offline_minutes=_int("OFFLINE_MINUTES", 5),

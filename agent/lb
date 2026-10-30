@@ -1,0 +1,727 @@
+#!/usr/bin/env python3
+"""lb — 학습 작업이 끝나면 LabBot이 Slack DM으로 알려 줍니다 (표준 라이브러리만, Python 3.6+).
+
+  lb run [--name NAME] [--min 1m] [--every 6h] -- python train.py --lr 1e-4
+  lb run -- docker run --gpus all IMAGE python train.py   (-d여도 컨테이너가 끝날 때 알림)
+  lb docker CONTAINER [--name NAME] [--every 6h]          (이미 떠 있는 컨테이너)
+  lb watch PID [--name NAME] [--log train.log] [--every 6h]
+  lb notify "eval 끝남: BLEU 31.2"
+
+설정: /etc/labbot-lb.conf (또는 ~/.config/labbot-lb.conf, LB_CONF 환경변수)
+  LABBOT_JOBS_URL=http://192.168.0.10:8787/jobs
+  LABBOT_JOBS_TOKEN=...
+  LABBOT_HOST=gpu1
+
+봇에 연결되지 않아도 작업은 그대로 실행되고, 종료 코드도 그대로 돌려줍니다.
+"""
+import collections
+import errno
+import getpass
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+VERSION = "1.1"
+TAIL_LINES = 50          # 메모리에 보관하는 로그 줄 수
+SEND_TRIES = 3
+CONF_PATHS = ["~/.config/labbot-lb.conf", "/etc/labbot-lb.conf"]
+
+# ── 비밀값 마스킹 ───────────────────────────────────────────
+_MASKS = [
+    (re.compile(r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{16,}"), "sk-***"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{16,}"), "hf_***"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "AKIA***"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "gh_***"),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"), "xox-***"),
+    (re.compile(r"(?i)(\bwandb\s+login\s+)(?:--\S+\s+)*\S+"), r"\1***"),
+    (re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer|token)\s+)\S+"), r"\1***"),
+    # wandb_api_key=..., aws_secret_access_key=..., token=..., password: ...
+    (re.compile(r"(?i)(\b[\w\-]*(?:token|password|passwd|secret|api[_\-]?key|access[_\-]?key)\b[\"']?\s*[=:]\s*)"
+                r"([\"']?)[^\s\"',;&]+"), r"\1\2***"),
+]
+
+
+def mask(text):
+    for pat, rep in _MASKS:
+        text = pat.sub(rep, text)
+    return text
+
+
+# ── 설정 ───────────────────────────────────────────────────
+def load_conf():
+    conf = {}
+    paths = [os.environ["LB_CONF"]] if os.environ.get("LB_CONF") else CONF_PATHS
+    for p in paths:
+        p = os.path.expanduser(p)
+        try:
+            with open(p) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        conf.setdefault(k.strip(), v.strip().strip("\"'"))
+        except (IOError, OSError):
+            continue
+    for k in ("LABBOT_JOBS_URL", "LABBOT_JOBS_TOKEN", "LABBOT_HOST"):
+        if os.environ.get(k):
+            conf[k] = os.environ[k]
+    conf.setdefault("LABBOT_HOST", socket.gethostname().split(".")[0])
+    return conf
+
+
+def warn(msg):
+    try:
+        sys.stderr.write("⚠️  lb: %s\n" % msg)
+        sys.stderr.flush()
+    except Exception:  # noqa: BLE001  (알림 때문에 작업이 죽으면 안 됨)
+        pass
+
+
+def whoami():
+    try:
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001
+        return str(os.getuid())
+
+
+class Client(object):
+    """봇으로 이벤트 전송. 실패해도 예외를 던지지 않습니다."""
+
+    def __init__(self, conf):
+        self.url = conf.get("LABBOT_JOBS_URL", "")
+        self.token = conf.get("LABBOT_JOBS_TOKEN", "")
+        self.host = conf.get("LABBOT_HOST", "")
+        self.user = whoami()
+        self.warned = False
+
+    def send(self, event, timeout=5, quiet=False, **fields):
+        if not self.url or not self.token:
+            if not self.warned and not quiet:
+                self.warned = True
+                warn("봇 주소나 토큰이 설정되지 않아 알림을 보내지 않아요 (/etc/labbot-lb.conf).")
+            return None
+        body = dict(fields, event=event, host=self.host, user=self.user, lb_version=VERSION)
+        data = json.dumps(body).encode()
+        err = None
+        for i in range(SEND_TRIES):
+            try:
+                req = urllib.request.Request(self.url, data=data, method="POST", headers={
+                    "Content-Type": "application/json", "Authorization": "Bearer " + self.token})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    return json.loads(r.read().decode() or "{}")
+            except urllib.error.HTTPError as e:
+                err = "HTTP %d" % e.code
+                if 400 <= e.code < 500:   # 토큰·형식 오류는 다시 보내도 같음
+                    break
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+            if i < SEND_TRIES - 1:
+                time.sleep(0.5 * (i + 1))
+        if not quiet:
+            warn("LabBot에 알림을 보내지 못했어요 (%s). 작업은 그대로 진행돼요." % err)
+        return None
+
+    def check_link(self, resp):
+        if resp is not None and resp.get("linked") is False:
+            warn("리눅스 계정 '%s'이(가) Slack과 연결되지 않아 DM을 보낼 수 없어요. "
+                 "Slack에서 /gpu link %s 을 먼저 해 주세요." % (self.user, self.user))
+
+
+# ── 로그 꼬리 ──────────────────────────────────────────────
+class Tail(object):
+    """출력의 마지막 N줄. '\\r'로 덮어쓰는 진행 막대는 마지막 상태만 남깁니다."""
+
+    def __init__(self, n=TAIL_LINES):
+        self.lines = collections.deque(maxlen=n)
+        self.partial = {}   # stream → 아직 줄바꿈이 오지 않은 부분 (stdout·stderr가 섞이지 않게)
+        self.lock = threading.Lock()
+
+    def feed(self, data, stream=1):
+        text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+        with self.lock:
+            parts = (self.partial.get(stream, "") + text).split("\n")
+            self.partial[stream] = parts.pop()[-2000:]
+            for p in parts:
+                self.lines.append(p.rstrip("\r").split("\r")[-1][-500:])
+
+    def get(self):
+        with self.lock:
+            out = list(self.lines)
+            rest = [p.split("\r")[-1].strip()[-500:] for p in self.partial.values()]
+        out = (out + [x for x in rest if x])[-self.lines.maxlen:]
+        return [mask(x) for x in out]
+
+    def last(self):
+        lines = [x for x in self.get() if x.strip()]
+        return lines[-1] if lines else ""
+
+
+def file_tail(path, n=TAIL_LINES):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 64 * 1024))
+            t = Tail(n)
+            t.feed(f.read())
+            return t.get()
+    except (IOError, OSError):
+        return []
+
+
+# ── 공통 ───────────────────────────────────────────────────
+def parse_duration(s):
+    """'90s', '1m', '6h', '1h30m', '2d', '0' → 초"""
+    s = (s or "").strip().lower()
+    if re.fullmatch(r"\d+", s):
+        return int(s)
+    parts = re.findall(r"(\d+)\s*([smhd])", s)
+    if not parts or re.sub(r"\d+\s*[smhd]", "", s).strip():
+        raise ValueError("기간 형식: 90s, 1m, 6h, 1h30m, 2d")
+    return sum(int(n) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[u] for n, u in parts)
+
+
+def auto_name(cmd):
+    """['python', '-u', 'train.py', ...] → 'train.py'"""
+    skip = {"python", "python3", "env", "nohup", "uv", "poetry", "conda", "time", "srun", "accelerate", "torchrun",
+            "deepspeed", "bash", "sh", "run", "launch", "-m", "-u"}
+    for tok in cmd:
+        base = os.path.basename(tok)
+        if tok.startswith("-") or "=" in tok or base in skip or re.fullmatch(r"python[\d.]*", base):
+            continue
+        return base[:80]
+    return os.path.basename(cmd[0])[:80] if cmd else "job"
+
+
+def fmt_cmd(cmd):
+    return mask(" ".join(shlex.quote(c) for c in cmd))[:500]
+
+
+class Ticker(threading.Thread):
+    """--every: 일정 간격으로 중간 보고"""
+
+    def __init__(self, every, fn):
+        threading.Thread.__init__(self, daemon=True)
+        self.every, self.fn, self.stop = every, fn, threading.Event()
+
+    def run(self):
+        while not self.stop.wait(self.every):
+            try:
+                self.fn()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _parse_opts(args, spec, command=False):
+    """간단한 옵션 파서: spec = {'--name': None, ...} → (opts, 나머지).
+    command=True면 첫 위치 인자부터는 모두 실행할 명령의 인자로 봅니다 (lb run)."""
+    opts, rest, i = dict(spec), [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            rest += args[i + 1:]
+            break
+        if rest and command:   # 명령이 시작된 뒤의 인자는 모두 명령의 것
+            rest += args[i:]
+            break
+        key, sep, val = a.partition("=")
+        if key in spec:
+            if not sep:
+                i += 1
+                if i >= len(args):
+                    raise ValueError("%s 뒤에 값이 필요해요" % key)
+                val = args[i]
+            opts[key] = val
+        elif a.startswith("--") and not (rest and command):
+            raise ValueError("모르는 옵션: %s" % a)
+        else:
+            rest.append(a)
+        i += 1
+    return opts, rest
+
+
+# ── docker ─────────────────────────────────────────────────
+# 컨테이너 안의 프로세스는 docker CLI의 자식이 아니라 containerd-shim의 자식이라, lb가 띄운 pid로는
+# GPU 사용량을 찾을 수 없습니다. 그래서 컨테이너의 메인 프로세스 pid(호스트 기준)를 봇에 따로 알립니다.
+DOCKER_BINS = ("docker", "podman")
+DOCKER_BOOL_SHORT = set("ditPq")   # 값을 받지 않는 짧은 옵션
+DOCKER_BOOL_LONG = {"--detach", "--interactive", "--tty", "--rm", "--privileged", "--publish-all", "--init",
+                    "--read-only", "--no-healthcheck", "--oom-kill-disable", "--quiet", "--help", "--sig-proxy",
+                    "--disable-content-trust"}
+
+
+def docker_run_info(cmd):
+    """`[sudo] docker run ...` / `docker container run ...` 이면 dict, 아니면 None.
+    at: 옵션을 끼워 넣을 위치, image: 이미지 인덱스, detach, cidfile, name(--name)"""
+    k = 0
+    while k < len(cmd) and (os.path.basename(cmd[k]) == "sudo" or (k and cmd[k].startswith("-"))):
+        k += 1
+    if k >= len(cmd) or os.path.basename(cmd[k]) not in DOCKER_BINS:
+        return None
+    prefix, j = cmd[:k + 1], k + 1
+    if cmd[j:j + 2] == ["container", "run"]:
+        j += 2
+    elif cmd[j:j + 1] == ["run"]:
+        j += 1
+    else:
+        return None
+    info = {"prefix": prefix, "at": j, "image": None, "detach": False, "cidfile": None, "name": None}
+    while j < len(cmd):
+        a = cmd[j]
+        if not a.startswith("-") or a == "-":
+            info["image"] = j
+            break
+        if a == "--":
+            info["image"] = j + 1 if j + 1 < len(cmd) else None
+            break
+        key, eq, val = a.partition("=")
+        if a.startswith("--"):
+            if not eq and key not in DOCKER_BOOL_LONG and j + 1 < len(cmd):
+                j += 1
+                val = cmd[j]
+            if key == "--detach":
+                info["detach"] = val.lower() not in ("false", "0") if eq else True
+            elif key in ("--cidfile", "--name"):
+                info[key[2:]] = val
+        else:   # -dit, -v a:b, -p8080:80, -e=X
+            flags, n = key[1:], 0
+            while n < len(flags) and flags[n] in DOCKER_BOOL_SHORT:
+                info["detach"] = info["detach"] or flags[n] == "d"
+                n += 1
+            if n == len(flags) - 1 and not eq and j + 1 < len(cmd):   # 마지막 글자가 값을 받는 옵션
+                j += 1
+        j += 1
+    return info
+
+
+def docker_name(cmd, info):
+    if info["name"]:
+        return info["name"]
+    if info["image"] is not None:
+        inner = cmd[info["image"] + 1:]
+        return auto_name(inner) if inner else os.path.basename(cmd[info["image"]].split(":")[0])
+    return "docker"
+
+
+def docker_out(prefix, args, timeout=20):
+    try:
+        out = subprocess.check_output(prefix + args, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                      timeout=timeout)
+        return out.decode("utf-8", "replace").strip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def container_pid(prefix, cid):
+    out = docker_out(prefix, ["inspect", "-f", "{{.State.Pid}}", cid])
+    return int(out) if out and out.isdigit() and int(out) > 0 else None
+
+
+def read_cid(path):
+    try:
+        with open(path) as f:
+            cid = f.read().strip()
+        return cid if re.fullmatch(r"[0-9a-f]{12,64}", cid) else None
+    except (IOError, OSError):
+        return None
+
+
+def _attach_container(client, base, prefix, cidfile, running):
+    """cidfile이 생기고 컨테이너가 시작되면 메인 프로세스 pid를 봇에 알림 (이미지 pull 중이면 기다림)"""
+    cid = None
+    while running():
+        cid = cid or read_cid(cidfile)
+        pid = container_pid(prefix, cid) if cid else None
+        if pid:
+            client.send("attach", pids=[pid], quiet=True, **base)
+            return
+        time.sleep(1)
+
+
+def _start_follower(info, cid, base, opts):
+    """docker run -d: 컨테이너가 끝날 때까지 기다리는 lb docker를 백그라운드로 띄우고 바로 돌아감"""
+    args = [sys.executable, os.path.abspath(__file__), "docker", cid, "--name", base["name"],
+            "--job-id", base["job_id"], "--started", str(base["started_at"]), "--cmd", base["cmd"],
+            "--docker", json.dumps(info["prefix"]), "--min", opts["--min"]]
+    if opts["--every"]:
+        args += ["--every", opts["--every"]]
+    try:
+        p = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        sys.stderr.write("lb: 컨테이너 %s 가 끝나면 Slack으로 알려 드려요 (백그라운드 감시 PID %d).\n"
+                         % (cid[:12], p.pid))
+        return True
+    except OSError as e:
+        warn("컨테이너 감시를 시작하지 못했어요: %s" % e)
+        return False
+
+
+def docker_follow(args, conf=None, out=None, err=None):
+    """lb docker CONTAINER: 컨테이너가 끝날 때까지 로그를 따라가다 종료 코드와 함께 알림"""
+    opts, rest = _parse_opts(args, {"--name": None, "--every": None, "--min": "0", "--job-id": None,
+                                    "--started": None, "--cmd": None, "--docker": None})
+    if len(rest) != 1:
+        raise ValueError("형식: lb docker <컨테이너 이름 또는 ID> [--name NAME] [--every 6h]")
+    prefix = json.loads(opts["--docker"]) if opts["--docker"] else [os.environ.get("LB_DOCKER", "docker")]
+    handoff = bool(opts["--job-id"])   # lb run -- docker run -d 에서 넘겨받은 작업
+    got = docker_out(prefix, ["inspect", "-f", "{{.Id}}|{{.State.Pid}}|{{.State.Running}}|{{.Name}}|{{.Config.Image}}",
+                              rest[0]])
+    parts = got.split("|") if got else []
+    if len(parts) != 5:
+        raise ValueError("컨테이너 %s 를 찾을 수 없어요 (docker inspect 실패)." % rest[0])
+    cid, pid, running, cname, image = parts
+    pid = int(pid) if pid.isdigit() and int(pid) > 0 else None
+    if running != "true" and not handoff:
+        raise ValueError("컨테이너 %s 는 실행 중이 아니에요." % rest[0])
+    min_s = parse_duration(opts["--min"])
+    every = parse_duration(opts["--every"]) if opts["--every"] else 0
+    client = Client(conf if conf is not None else load_conf())
+    out = out or getattr(sys.stdout, "buffer", sys.stdout)
+    err = err or getattr(sys.stderr, "buffer", sys.stderr)
+    started = int(opts["--started"]) if handoff and opts["--started"] else int(
+        (pid and pid_info(pid)[1]) or time.time())
+    base = {"job_id": opts["--job-id"] or uuid.uuid4().hex,
+            "name": (opts["--name"] or cname.lstrip("/") or cid[:12])[:100],
+            "cmd": opts["--cmd"] or mask("docker container %s (%s)" % (cname.lstrip("/"), image))[:500],
+            "pid": pid, "started_at": started, "mode": "run"}
+    if not handoff:
+        client.check_link(client.send("start", **base))
+        sys.stderr.write("lb: 컨테이너 %s 감시 중… 끝나면 Slack으로 알려 드려요 (Ctrl+C: 감시만 멈춤).\n"
+                         % base["name"])
+    if pid:
+        client.send("attach", pids=[pid], quiet=True, **base)
+
+    tail = Tail()
+    waiter = subprocess.Popen(prefix + ["wait", cid], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+    logs = subprocess.Popen(prefix + ["logs", "-f", "--tail", str(TAIL_LINES), cid], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    readers = [threading.Thread(target=_pump, args=(logs.stdout.fileno(), out, tail), daemon=True),
+               threading.Thread(target=_pump, args=(logs.stderr.fileno(), err, tail, 2), daemon=True)]
+    for t in readers:
+        t.start()
+    ticker = None
+    if every:
+        ticker = Ticker(every, lambda: client.send("progress", elapsed=int(time.time() - started),
+                                                   last_line=tail.last(), **base))
+        ticker.start()
+
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(s, stop)
+        except (ValueError, OSError):
+            pass
+    try:
+        wout = waiter.communicate()[0].decode("utf-8", "replace").split()
+    except KeyboardInterrupt:
+        for p in (waiter, logs):
+            p.kill()
+        sys.stderr.write("lb: 감시를 멈췄어요 (컨테이너는 계속 돌아요).\n")
+        client.send("end", ended_at=int(time.time()), exit_code=None, signal=None, tail=tail.get(), notify=False,
+                    cancelled=True, **base)
+        return 130
+    ended = time.time()
+    code = int(wout[-1]) if wout and wout[-1].isdigit() else None   # --rm으로 이미 지워졌으면 알 수 없음
+    try:
+        logs.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        logs.kill()
+    for t in readers:
+        t.join(timeout=5)
+    if ticker:
+        ticker.stop.set()
+    notify = not (code == 0 and ended - started < min_s)
+    client.send("end", ended_at=int(ended), exit_code=code, signal=None, tail=tail.get(), notify=notify, **base)
+    return 0
+
+
+# ── lb run ─────────────────────────────────────────────────
+def _pump(src_fd, dst, tail, stream=1):
+    """자식 출력 → 내 출력 그대로 + 꼬리 보관"""
+    while True:
+        try:
+            data = os.read(src_fd, 65536)
+        except OSError as e:
+            if e.errno == errno.EINTR:
+                continue
+            break   # pty는 자식이 끝나면 EIO
+        if not data:
+            break
+        try:
+            dst.write(data)
+            dst.flush()
+        except (IOError, OSError, ValueError):
+            pass
+        tail.feed(data, stream)
+
+
+def _use_pty():
+    try:
+        import pty  # noqa: F401
+        return sys.stdout.isatty() and sys.stderr.isatty() and os.name == "posix"
+    except ImportError:
+        return False
+
+
+def _copy_winsize(fd):
+    try:
+        import fcntl
+        import termios
+        ws = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, ws)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run(args, conf=None, out=None, err=None):
+    """명령을 실행하고 종료 코드를 돌려줍니다 (시그널로 끝나면 -signum)."""
+    opts, cmd = _parse_opts(args, {"--name": None, "--min": "1m", "--every": None}, command=True)
+    if not cmd:
+        raise ValueError("실행할 명령이 없어요. 예: lb run -- python train.py")
+    min_s = parse_duration(opts["--min"])
+    every = parse_duration(opts["--every"]) if opts["--every"] else 0
+    dk = docker_run_info(cmd)
+    name = (opts["--name"] or (docker_name(cmd, dk) if dk else auto_name(cmd)))[:100]
+    shown_cmd = fmt_cmd(cmd)
+    tmpdir = None
+    if dk and not dk["cidfile"]:   # 컨테이너 ID를 알아내기 위해 --cidfile을 끼워 넣음
+        tmpdir = tempfile.mkdtemp(prefix="lb-")
+        dk["cidfile"] = os.path.join(tmpdir, "cid")
+        cmd = cmd[:dk["at"]] + ["--cidfile", dk["cidfile"]] + cmd[dk["at"]:]
+    client = Client(conf if conf is not None else load_conf())
+    out = out or getattr(sys.stdout, "buffer", sys.stdout)
+    err = err or getattr(sys.stderr, "buffer", sys.stderr)
+    tail = Tail()
+    job_id = uuid.uuid4().hex
+    started = time.time()
+
+    use_pty = out is getattr(sys.stdout, "buffer", None) and _use_pty()
+    readers = []
+    try:
+        if use_pty:
+            import pty
+            master, slave = pty.openpty()
+            _copy_winsize(slave)
+            # 새 세션: 터미널의 Ctrl+C는 lb만 받고, lb가 자식에게 그대로 전달 (두 번 받지 않도록)
+            child = subprocess.Popen(cmd, stdout=slave, stderr=slave, start_new_session=True)
+            os.close(slave)
+            readers.append(threading.Thread(target=_pump, args=(master, out, tail), daemon=True))
+        else:
+            child = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            readers.append(threading.Thread(target=_pump, args=(child.stdout.fileno(), out, tail), daemon=True))
+            readers.append(threading.Thread(target=_pump, args=(child.stderr.fileno(), err, tail, 2), daemon=True))
+    except OSError as e:
+        warn("명령을 실행할 수 없어요: %s" % e)
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        return 127 if e.errno == errno.ENOENT else 126
+    for t in readers:
+        t.start()
+
+    def forward(signum, _frame):
+        try:
+            if signum == signal.SIGINT:   # 터미널 Ctrl+C처럼 프로세스 그룹 전체에
+                os.killpg(child.pid, signum)
+            else:
+                child.send_signal(signum)
+        except OSError:
+            pass
+    old = {}
+    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            old[s] = signal.signal(s, forward)
+        except (ValueError, OSError):   # 메인 스레드가 아닐 때
+            pass
+    if use_pty:
+        try:
+            old[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_a: _copy_winsize(master))
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    base = {"job_id": job_id, "name": name, "cmd": shown_cmd, "pid": child.pid, "started_at": int(started),
+            "mode": "run"}
+    starter = threading.Thread(target=lambda: client.check_link(client.send("start", **base)), daemon=True)
+    starter.start()
+    if dk and not dk["detach"]:
+        threading.Thread(target=_attach_container, args=(client, base, dk["prefix"], dk["cidfile"],
+                                                         lambda: child.poll() is None), daemon=True).start()
+    ticker = None
+    if every:
+        ticker = Ticker(every, lambda: client.send("progress", elapsed=int(time.time() - started),
+                                                   last_line=tail.last(), **base))
+        ticker.start()
+
+    while True:
+        try:
+            rc = child.wait()
+            break
+        except KeyboardInterrupt:   # 핸들러를 못 단 경우
+            continue
+    for t in readers:
+        t.join(timeout=5)
+    if use_pty:
+        try:
+            os.close(master)
+        except OSError:
+            pass
+    if ticker:
+        ticker.stop.set()
+    for s, h in old.items():
+        try:
+            signal.signal(s, h)
+        except (ValueError, OSError):
+            pass
+
+    ended = time.time()
+    sig = -rc if rc < 0 else None
+    code = 128 + sig if sig else rc
+    notify = not (code == 0 and ended - started < min_s)
+    starter.join(timeout=10)
+    if dk and dk["detach"] and rc == 0:   # docker run -d: 컨테이너가 끝날 때 백그라운드 감시가 end를 보냄
+        last = tail.last().strip()
+        cid = read_cid(dk["cidfile"]) or (last if re.fullmatch(r"[0-9a-f]{12,64}", last) else None)
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        if cid and _start_follower(dk, cid, base, opts):
+            return rc
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    client.send("end", ended_at=int(ended), exit_code=code, signal=sig, tail=tail.get(), notify=notify, **base)
+    return rc
+
+
+def exit_like(rc):
+    """자식과 같은 방식으로 끝내기: 시그널이면 같은 시그널로 죽어서 부모 셸이 똑같이 보게"""
+    if rc < 0:
+        sig = -rc
+        try:
+            if sig not in (signal.SIGKILL, signal.SIGSTOP):   # 이 둘은 핸들러를 바꿀 수 없음 (항상 기본 동작)
+                signal.signal(sig, signal.SIG_DFL)
+            sys.stdout.flush()
+            os.kill(os.getpid(), sig)
+            time.sleep(1)
+        except Exception:  # noqa: BLE001
+            pass
+        sys.exit(128 + sig)
+    sys.exit(rc)
+
+
+# ── lb watch ───────────────────────────────────────────────
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError as e:
+        return e.errno == errno.EPERM   # 다른 사용자의 프로세스
+    try:   # 좀비(이미 끝났지만 부모가 거두지 않음)
+        with open("/proc/%d/stat" % pid) as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (IOError, OSError, IndexError):
+        return True
+
+
+def pid_info(pid):
+    """(명령, 시작 시각 epoch). /proc가 없으면 (None, None)"""
+    cmd, start = None, None
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            cmd = [x.decode("utf-8", "replace") for x in f.read().split(b"\0") if x]
+        with open("/proc/%d/stat" % pid) as f:
+            ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat") as f:
+            btime = next(int(ln.split()[1]) for ln in f if ln.startswith("btime"))
+        start = btime + ticks / float(os.sysconf("SC_CLK_TCK"))
+    except Exception:  # noqa: BLE001
+        pass
+    return cmd, start
+
+
+def watch(args, conf=None, poll=5.0):
+    opts, rest = _parse_opts(args, {"--name": None, "--log": None, "--every": None})
+    if len(rest) != 1 or not rest[0].isdigit():
+        raise ValueError("형식: lb watch PID [--log train.log] [--name NAME] [--every 6h]")
+    pid = int(rest[0])
+    if not pid_alive(pid):
+        raise ValueError("PID %d 프로세스가 없어요." % pid)
+    cmd, start = pid_info(pid)
+    name = (opts["--name"] or (auto_name(cmd) if cmd else "pid %d" % pid))[:100]
+    every = parse_duration(opts["--every"]) if opts["--every"] else 0
+    client = Client(conf if conf is not None else load_conf())
+    started = start or time.time()
+    log = opts["--log"]
+    base = {"job_id": uuid.uuid4().hex, "name": name, "cmd": fmt_cmd(cmd) if cmd else "", "pid": pid,
+            "started_at": int(started), "mode": "watch"}
+    client.check_link(client.send("start", **base))
+    sys.stderr.write("lb: PID %d (%s) 감시 중… 끝나면 Slack으로 알려 드려요.\n" % (pid, name))
+    ticker = None
+    if every:
+        ticker = Ticker(every, lambda: client.send(
+            "progress", elapsed=int(time.time() - started),
+            last_line=([x for x in file_tail(log) if x.strip()] or [""])[-1] if log else "", **base))
+        ticker.start()
+    try:
+        while pid_alive(pid):
+            time.sleep(poll)
+    except KeyboardInterrupt:
+        sys.stderr.write("lb: 감시를 멈췄어요 (작업에는 영향 없음).\n")
+        client.send("end", ended_at=int(time.time()), exit_code=None, signal=None, tail=[], notify=False,
+                    cancelled=True, **base)
+        return 130
+    if ticker:
+        ticker.stop.set()
+    client.send("end", ended_at=int(time.time()), exit_code=None, signal=None,
+                tail=file_tail(log) if log else [], notify=True, **base)
+    return 0
+
+
+# ── lb notify ──────────────────────────────────────────────
+def notify(args, conf=None):
+    text = mask(" ".join(args).strip())[:2000]
+    if not text:
+        raise ValueError('형식: lb notify "eval 끝남: BLEU 31.2"')
+    client = Client(conf if conf is not None else load_conf())
+    client.check_link(client.send("notify", text=text))
+    return 0
+
+
+USAGE = __doc__.split("설정:")[0].strip()
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    sub, rest = argv[0], argv[1:]
+    try:
+        if sub == "run":
+            exit_like(run(rest))
+        if sub == "watch":
+            return watch(rest)
+        if sub == "docker":
+            return docker_follow(rest)
+        if sub == "notify":
+            return notify(rest)
+        if sub in ("--version", "version"):
+            print("lb " + VERSION)
+            return 0
+        raise ValueError("모르는 명령: %s\n\n%s" % (sub, USAGE))
+    except ValueError as e:
+        sys.stderr.write("lb: %s\n" % e)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

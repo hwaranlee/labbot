@@ -64,6 +64,8 @@ class Monitor:
         self.offline_alerted: set[str] = set()
         self.disk_alerted: dict[tuple, float] = {}   # (host, mount) -> 마지막 알림 시각
         self.intruder_alerted: set[tuple] = set()    # (reservation id, linux user)
+        self.listeners: list = []                    # fn(host, payload): 지표를 받을 때마다 (작업 GPU 집계 등)
+        self.jobs = None                             # jobs.Tracker (POST /jobs 처리)
 
     # ── 수신 ────────────────────────────────────────────────
     def ingest(self, data: dict) -> None:
@@ -98,6 +100,11 @@ class Monitor:
             self.ctx.db.many("INSERT INTO gpu_samples VALUES (?,?,?,?,?,?,?)", g_rows)
         if u_rows:
             self.ctx.db.many("INSERT INTO gpu_user_samples VALUES (?,?,?,?,?,?)", u_rows)
+        for fn in self.listeners:
+            try:
+                fn(host, data)
+            except Exception:  # noqa: BLE001
+                log.exception("지표 처리 실패: %s", getattr(fn, "__name__", fn))
 
     # ── 조회 ────────────────────────────────────────────────
     def hosts(self) -> list[tuple[str, dict, bool]]:
@@ -435,7 +442,8 @@ def _size(g: float) -> str:
 
 # ── 지표 수신 HTTP 서버 ─────────────────────────────────────
 def start_receiver(ctx: Ctx, mon: Monitor) -> ThreadingHTTPServer:
-    token = ctx.cfg.metrics_token
+    # 토큰을 경로별로 나눔: METRICS_TOKEN은 /metrics만, JOBS_TOKEN(lb CLI, 일반 사용자에게 공개)은 /jobs만
+    tokens = {"/metrics": ctx.cfg.metrics_token, "/jobs": ctx.cfg.jobs_token}
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, obj: dict):
@@ -452,17 +460,23 @@ def start_receiver(ctx: Ctx, mon: Monitor) -> ThreadingHTTPServer:
             self._send(404, {"ok": False})
 
         def do_POST(self):  # noqa: N802
-            if self.path != "/metrics":
+            if self.path not in tokens:
                 return self._send(404, {"ok": False})
+            token = tokens[self.path]
             if not token or self.headers.get("Authorization") != f"Bearer {token}":
                 return self._send(401, {"ok": False, "error": "unauthorized"})
             n = int(self.headers.get("Content-Length") or 0)
             if n <= 0 or n > 2_000_000:
                 return self._send(413, {"ok": False})
             try:
-                mon.ingest(json.loads(self.rfile.read(n)))
+                body = json.loads(self.rfile.read(n))
+                if self.path == "/jobs":
+                    if mon.jobs is None:
+                        return self._send(503, {"ok": False, "error": "jobs disabled"})
+                    return self._send(200, mon.jobs.handle(body))
+                mon.ingest(body)
             except Exception as e:  # noqa: BLE001
-                log.warning("잘못된 지표: %s", e)
+                log.warning("잘못된 요청 %s: %s", self.path, e)
                 return self._send(400, {"ok": False, "error": str(e)})
             self._send(200, {"ok": True})
 

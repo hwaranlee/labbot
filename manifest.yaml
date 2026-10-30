@@ -60,6 +60,10 @@ features:
       description: GPU 현황·예약
       usage_hint: "[free|reserve gpu1 0,1 3h|release|mine|link linux-user|summary|today|week]"
       should_escape: true
+    - command: /jobs
+      description: lb로 실행한 학습 작업 (내 작업 · 연구실 전체)
+      usage_hint: "[all|help]"
+      should_escape: false
     - command: /server
       description: 서버 CPU·메모리·디스크 현황
       usage_hint: "[help]"
